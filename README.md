@@ -112,14 +112,6 @@ Forensic analysis and preparation of a compromised system.
 Advanced troubleshooting of deep system setting corruption.
 
 
-# Automated Analysis Proof
-
-I Used Tria.ge To Prove that this Tool Is Legitimate 
-You Can Access the Behavioral Analysis Here:
-
-[Tria.ge Automated Analysis Link](https://tria.ge/250902-qdam8abn3z/behavioral1)
-
-
 Author: Security Enthusiast
 Version: 1.0
 License: Tool provided for legitimate recovery and educational purposes.
