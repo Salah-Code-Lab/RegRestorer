@@ -1,5 +1,8 @@
 // This Project Will Revert the Registry back to Its Defaults 
 // And Kill Presistance it will be the Greatest Software or .exe
+// Source Code Is available if Community Wants to Customize it 
+// HOWEVER DO NOT ADD NUKE RUN KEYS ALL USERS THAT WILL RESULT IN A 
+// CRITICAL_PROCESS_DIED BSOD The Rest Of the Functions are Safe :D
 #define _CRT_SECURE_NO_WARNINGS
 #define _SCL_SECURE_NO_WARNINGS
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -1026,5 +1029,6 @@ INT WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, INT) {
         return 0;
     }
 }
+
 
 
