@@ -210,17 +210,23 @@ static void RestoreLSAPackages() {
 
 
 static void RestoreImageFileExecutionOptions() {
-    // Target common system binaries that malware debugs
+    // Target common system binaries that malware may hook
     const wchar_t* targetExecutables[] = { L"explorer.exe", L"svchost.exe", L"winlogon.exe", L"lsass.exe" };
 
     for (const auto& exe : targetExecutables) {
         wchar_t keyPath[256];
         swprintf(keyPath, 256, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\%s", exe);
-        // The nuclear option: delete the entire key for this executable.
-        SHDeleteKeyW(HKEY_LOCAL_MACHINE, keyPath);
-        SHDeleteKeyW(HKEY_LOCAL_MACHINE, (std::wstring(keyPath) + L"\\0").c_str()); // Sometimes a subkey
+
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ | KEY_WRITE, &hKey) == ERROR_SUCCESS) {
+            // Only remove debugger hooks, do NOT delete the whole key
+            RegDeleteValueW(hKey, L"Debugger");
+            RegCloseKey(hKey);
+        }
     }
 }
+
+
 
 
 
@@ -1022,3 +1028,4 @@ INT WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, INT) {
         return 0;
     }
 }
+
