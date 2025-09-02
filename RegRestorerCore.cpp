@@ -985,12 +985,10 @@ INT WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, INT) {
         RestoreSFP();
 
         RestoreCommonFileAssociations();
-        NukeRunKeys(); // This is your original function for current user and machine
-        NukeRunKeysAllUsers(); // <- THIS IS THE NUCLEAR OPTION FOR OTHER USERS
+// Run/Runonce Keys Nuking Has Been Removed For Safety Issues
         RestoreSafeMode();
         ResetFirewall();
         ResetBrowserPolicies();
-        // --- [END] NEW ADVANCED FUNCTIONS ---
 
         printf("Advanced sterilization complete.\n");
         printf("Registry restoration complete!\n");
@@ -1028,4 +1026,5 @@ INT WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, INT) {
         return 0;
     }
 }
+
 
