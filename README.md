@@ -20,17 +20,11 @@ RegRestorer is a C++ application that acts as a "nuclear option" for repairing a
 ⚡ Core Capabilities
 1. Persistence Removal (The "Nuke")
 
-Current User & Machine-wide: Cleans standard Run, RunOnce, RunServices keys in HKEY_CURRENT_USER and HKEY_LOCAL_MACHINE.
-
-All User Profiles: Employs a advanced technique to load every user's NTUSER.DAT hive and purge their individual Run keys, eliminating persistence for all accounts on the system.
-
 Advanced Persistence: Targets and reverts sophisticated malware techniques:
 
 Image File Execution Options (IFEO): Removes debugger hijacks for explorer.exe, svchost.exe, winlogon.exe, and lsass.exe.
 
  Winlogon Notify: Cleans malicious DLLs loaded via the Notification Packages value.
-
-LSA Packages/Security: Resets authentication and security package configurations to system defaults.
 
 File Association Hijacking: Restores correct commands for .exe, .txt, .cmd, .bat, and .lnk files.
 
@@ -40,7 +34,6 @@ Re-enables Task Manager, Registry Editor, Command Prompt, and PowerShell by remo
 
 Restores User Account Control (UAC) to its default prompting behavior.
 
-Resets Ctrl+Alt+Del requirement for secure login.
 
 # Windows Defender Reanimation
 
