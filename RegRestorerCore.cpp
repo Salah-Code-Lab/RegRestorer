@@ -2,6 +2,7 @@
 #define _SCL_SECURE_NO_WARNINGS
 #pragma warning(disable:4996)
 #pragma comment(lib, "Dwmapi.lib")
+
 #include <windows.h>
 #include <shlwapi.h>
 #include <lm.h>
@@ -14,6 +15,10 @@
 #include <commctrl.h>
 #include <uxtheme.h>
 #include <dwmapi.h>
+#include <cstdlib>
+#include <iostream>
+#include <winternl.h>
+#include <strsafe.h>
 
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -21,7 +26,6 @@
 #pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "uxtheme.lib")
-
 
 // -------------------- Constants --------------------
 #define IDC_CHECK_SELECTALL 100
@@ -35,6 +39,9 @@
 #define IDC_CHECK_GROUPPOLICY 108
 #define IDC_CHECK_RECOVERY 109
 #define IDC_CHECK_BOOT 110
+#define IDC_SET_CAD_0 111
+#define IDC_DELETE_SCANCODE 112
+#define IDC_REPAIR_SERVICES 113
 #define IDC_BUTTON_RUN 201
 #define IDC_BUTTON_RESTART 202
 #define IDC_PROGRESS 301
@@ -42,29 +49,48 @@
 #define IDC_PERCENTAGE 303
 #define IDC_BUTTON_DARKMODE 304
 
-static void UpdateProgress(const wchar_t* status);
+HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
+HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
+HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage, g_hDeleteScanCodeMaps,
+g_hSetCAD0, g_hRepairCriticalServices;
+HWND g_hButtonDarkMode;
+int g_TotalSteps = 0;
+int g_CurrentStep = 0;
+bool g_DarkMode = false;
+HBRUSH g_hDarkBrush = NULL;
+HBRUSH g_hBackgroundBrush = NULL;
 
-// -------------------- Global Variables --------------------
-
-static void RepairCriticalServices() {
-    UpdateProgress(L"Repairing critical services");
-
-    const wchar_t* criticalServices[] = {
-        L"WinDefend", L"BITS", L"wuauserv", L"VSS",
-        L"Schedule", L"EventLog", L"PlugPlay"
-    };
-
-    for (auto service : criticalServices) {
-        wchar_t cmd[256];
-        swprintf(cmd, 256, L"sc config %s start= auto", service);
-        _wsystem(cmd);
-
-        swprintf(cmd, 256, L"sc start %s", service);
-        _wsystem(cmd);
-    }
+// -------------------- Utility Functions --------------------
+int SafeSystem(const wchar_t* cmd) {
+    if (!cmd) return -1;
+    return _wsystem(cmd);
 }
 
+bool WriteRegDWORD(HKEY root, LPCWSTR subKey, LPCWSTR name, DWORD value) {
+    HKEY hKey = NULL;
+    if (RegCreateKeyExW(root, subKey, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS)
+        return false;
 
+    bool ok = (RegSetValueExW(hKey, name, 0, REG_DWORD,
+        (BYTE*)&value, sizeof(DWORD)) == ERROR_SUCCESS);
+    RegCloseKey(hKey);
+    return ok;
+}
+
+bool WriteRegString(HKEY root, LPCWSTR subKey, LPCWSTR name, LPCWSTR value) {
+    HKEY hKey = NULL;
+    if (RegCreateKeyExW(root, subKey, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS)
+        return false;
+
+    bool ok = (RegSetValueExW(hKey, name, 0, REG_SZ,
+        (BYTE*)value, (DWORD)((wcslen(value) + 1) * sizeof(WCHAR))) == ERROR_SUCCESS);
+    RegCloseKey(hKey);
+    return ok;
+}
+
+static void UpdateProgress(const wchar_t* status);
+
+// -------------------- Windows Version Check --------------------
 static bool IsWindows10OrGreater() {
     OSVERSIONINFOEXW osvi = { 0 };
     osvi.dwOSVersionInfoSize = sizeof(osvi);
@@ -81,54 +107,12 @@ static bool IsWindows10OrGreater() {
         &osvi, VER_MAJORVERSION | VER_MINORVERSION, dwlConditionMask) != FALSE;
 }
 
-
-
-HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
-HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
-HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage, g_hDeleteScanCodeMaps,
-g_hSetCAD0, g_hRepairCriticalServices;
-HWND g_hButtonDarkMode;
-int g_TotalSteps = 0;
-int g_CurrentStep = 0;
-bool g_DarkMode = false;
-HBRUSH g_hDarkBrush = NULL;
-
-
-// -------------------- Restart System --------------------
-static void RestartSystem() {
-    int msgboxID = MessageBoxW(NULL,
-        L"A restart is recommended to apply all changes.\nDo you want to restart now?",
-        L"Restart Required",
-        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
-
-    if (msgboxID == IDYES) {
-        // Initiate system restart
-        HANDLE hToken;
-        TOKEN_PRIVILEGES tkp{};
-
-        // Get a token for this process
-        OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
-
-        // Get the LUID for the shutdown privilege
-        LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
-
-        tkp.PrivilegeCount = 1;
-        tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-        // Get the shutdown privilege for this process
-        AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, (PTOKEN_PRIVILEGES)NULL, 0);
-
-        // Shut down the system and force all applications to close
-        ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
-    }
-}
-
 // -------------------- Admin Check --------------------
 static BOOL IsElevated() {
     BOOL fRet = FALSE;
     HANDLE hToken = NULL;
     if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
-        TOKEN_ELEVATION Elevation{} ;
+        TOKEN_ELEVATION Elevation{};
         DWORD cbSize = sizeof(TOKEN_ELEVATION);
         if (GetTokenInformation(hToken, TokenElevation, &Elevation, sizeof(Elevation), &cbSize)) {
             fRet = Elevation.TokenIsElevated;
@@ -138,26 +122,51 @@ static BOOL IsElevated() {
     return fRet;
 }
 
+// -------------------- Restart System --------------------
+static void RestartSystem() {
+    int msgboxID = MessageBoxW(NULL,
+        L"A restart is recommended to apply all changes.\nDo you want to restart now?",
+        L"Restart Required",
+        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+
+    if (msgboxID == IDYES) {
+        HANDLE hToken;
+        TOKEN_PRIVILEGES tkp{};
+
+        OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken);
+        LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
+
+        tkp.PrivilegeCount = 1;
+        tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+        AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, (PTOKEN_PRIVILEGES)NULL, 0);
+        ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER);
+    }
+}
+
 // -------------------- Dark Mode Functions --------------------
 static void EnableDarkMode(HWND hWnd) {
     BOOL value = TRUE;
-    DwmSetWindowAttribute(hWnd, 20, &value, sizeof(value)); // DWMWA_USE_IMMERSIVE_DARK_MODE
+    DwmSetWindowAttribute(hWnd, 20, &value, sizeof(value));
 
     HWND controls[] = {
         g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
-        g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
-        g_hButtonRestart, g_hProgress, g_hButtonDarkMode
+        g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hSetCAD0,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices,
+        g_hButtonRun, g_hButtonRestart, g_hProgress, g_hButtonDarkMode,
+        g_hStatus, g_hPercentage
     };
 
-    for (HWND ctrl : controls)
-        SetWindowTheme(ctrl, L"DarkMode_Explorer", NULL);
+    for (HWND ctrl : controls) {
+        if (ctrl) SetWindowTheme(ctrl, L"DarkMode_Explorer", NULL);
+    }
 
     if (!g_hDarkBrush)
         g_hDarkBrush = CreateSolidBrush(RGB(32, 32, 32));
 
     SetWindowText(g_hButtonDarkMode, L"☀️ Light Mode");
-
+    SetClassLongPtr(hWnd, GCLP_HBRBACKGROUND, (LONG_PTR)g_hDarkBrush);
     InvalidateRect(hWnd, NULL, TRUE);
     UpdateWindow(hWnd);
 }
@@ -170,76 +179,24 @@ static void DisableDarkMode(HWND hWnd) {
         g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
-        g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0, g_hDeleteScanCodeMaps
+        g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices,
+        g_hStatus, g_hPercentage
     };
 
-    for (HWND ctrl : controls)
-        SetWindowTheme(ctrl, L"Explorer", NULL);
+    for (HWND ctrl : controls) {
+        if (ctrl) SetWindowTheme(ctrl, L"Explorer", NULL);
+    }
 
     SetWindowText(g_hButtonDarkMode, L"🌙 Dark Mode");
 
+    if (!g_hBackgroundBrush)
+        g_hBackgroundBrush = CreateSolidBrush(RGB(255, 255, 255));
+
+    SetClassLongPtr(hWnd, GCLP_HBRBACKGROUND, (LONG_PTR)g_hBackgroundBrush);
     InvalidateRect(hWnd, NULL, TRUE);
     UpdateWindow(hWnd);
 }
-
-
-// -------------------- Message Handler --------------------
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    switch (message) {
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case IDC_BUTTON_DARKMODE:
-            g_DarkMode = !g_DarkMode;
-            if (g_DarkMode)
-                EnableDarkMode(hWnd);
-            else
-                DisableDarkMode(hWnd);
-            break;
-        case IDC_BUTTON_RUN:
-            // Run recovery plan (call all relevant functions)
-            break;
-        case IDC_BUTTON_RESTART:
-            RestartSystem();
-            break;
-        }
-        break;
-
-    case WM_CTLCOLORSTATIC:
-        if (g_DarkMode) {
-            HDC hdcStatic = (HDC)wParam;
-            SetTextColor(hdcStatic, RGB(255, 255, 255));
-            SetBkMode(hdcStatic, TRANSPARENT);
-            return (LRESULT)g_hDarkBrush;
-        }
-        break;
-
-    case WM_CTLCOLORBTN:
-        if (g_DarkMode) {
-            HDC hdcBtn = (HDC)wParam;
-            SetTextColor(hdcBtn, RGB(255, 255, 255));
-            SetBkMode(hdcBtn, TRANSPARENT);
-            return (LRESULT)g_hDarkBrush;
-        }
-        break;
-
-    case WM_CTLCOLORDLG:
-        if (g_DarkMode) {
-            return (LRESULT)g_hDarkBrush;
-        }
-        break;
-
-    case WM_DESTROY:
-        if (g_hDarkBrush)
-            DeleteObject(g_hDarkBrush);
-        PostQuitMessage(0);
-        break;
-
-    default:
-        return DefWindowProc(hWnd, message, wParam, lParam);
-    }
-    return 0;
-}
-
 
 // -------------------- Helper Function --------------------
 static void SetRegValueForHives(const wchar_t* subKey, const wchar_t* valueName, DWORD data) {
@@ -259,7 +216,6 @@ static void UpdateProgress(const wchar_t* status) {
     SendMessage(g_hProgress, PBM_STEPIT, 0, 0);
     g_CurrentStep++;
 
-    // Calculate percentage
     int percentage = (g_CurrentStep * 100) / g_TotalSteps;
 
     wchar_t progressText[256];
@@ -272,35 +228,37 @@ static void UpdateProgress(const wchar_t* status) {
     SetWindowText(g_hPercentage, percentageText);
     UpdateWindow(g_hStatus);
     UpdateWindow(g_hPercentage);
+
+    // Process messages to keep UI responsive
+    MSG msg;
+    while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
 }
 
 // -------------------- Toggle All Checkboxes --------------------
 static void ToggleAllCheckboxes(bool state) {
-    SendMessage(g_hCheckDefender, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckSystemTools, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckPersistence, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckSafeDefaults, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckIFEO, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckBrowser, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckFileAssoc, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckGroupPolicy, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckRecovery, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hCheckBoot, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hSetCAD0, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    SendMessage(g_hRepairCriticalServices, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
-    
+    HWND checkboxes[] = {
+        g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
+        g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser,
+        g_hCheckFileAssoc, g_hCheckGroupPolicy, g_hCheckRecovery,
+        g_hCheckBoot, g_hSetCAD0, g_hDeleteScanCodeMaps, g_hRepairCriticalServices
+    };
+
+    for (HWND checkbox : checkboxes) {
+        SendMessage(checkbox, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
 }
-
-
 
 // -------------------- Defender Reactivation --------------------
 static void ReanimateDefenderAll() {
     UpdateProgress(L"Reactivating Windows Defender");
 
-    DWORD enable = 0;    // 0 = enabled
-    DWORD tamper = 1;    // Tamper Protection on
-    DWORD pua = 1;       // PUA Protection on
-    DWORD spynet = 1;    // Cloud/SpyNet on
+    DWORD enable = 0;
+    DWORD tamper = 1;
+    DWORD pua = 1;
+    DWORD spynet = 1;
 
     const wchar_t* pathsHKLM[] = {
         L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
@@ -411,12 +369,12 @@ static void RestoreKeyboardAndCMDAndOthers() {
 
 static void UpdateGroupPolicy() {
     UpdateProgress(L"Updating Group Policy");
-    system("gpupdate /force");
+    SafeSystem(L"gpupdate /force");
 }
 
 static void EnableWindowsRecoveryEnvironment() {
     UpdateProgress(L"Enabling Windows Recovery Environment");
-    system("reagentc /enable");
+    SafeSystem(L"reagentc /enable");
 }
 
 static void RestoreBootSettings() {
@@ -466,15 +424,17 @@ static void RestoreBootSettings() {
 
 // Delete Scancode Map
 static void DeleteScanCodeMap() {
+    UpdateProgress(L"Deleting Scancode Map");
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegDeleteValueW(hKey, L"Scancode Map");
         RegCloseKey(hKey);
     }
-};
+}
 
 // Set CAD to 0
 static void SetCAD0() {
+    UpdateProgress(L"Setting CAD to 0");
     HKEY hKey = nullptr;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         DWORD val = 0;
@@ -482,6 +442,7 @@ static void SetCAD0() {
         RegCloseKey(hKey);
     }
 }
+
 // -------------------- Expanded Persistence Protection --------------------
 static void ProtectRunKeys() {
     UpdateProgress(L"Removing Malware Persistence");
@@ -606,108 +567,140 @@ static void ResetBrowserSettings() {
 static void RepairFileAssociations() {
     UpdateProgress(L"Repairing File Associations");
 
-    system("assoc .exe=exefile");
-    system("assoc .txt=txtfile");
-    system("assoc .html=htmlfile");
-    system("assoc .bat=batfile");
-    system("assoc .cmd=cmdfile");
-    system("assoc .ps1=Microsoft.PowerShellScript.1");
+    SafeSystem(L"assoc .exe=exefile");
+    SafeSystem(L"assoc .txt=txtfile");
+    SafeSystem(L"assoc .html=htmlfile");
+    SafeSystem(L"assoc .bat=batfile");
+    SafeSystem(L"assoc .cmd=cmdfile");
+    SafeSystem(L"assoc .ps1=Microsoft.PowerShellScript.1");
 
-    system("ftype exefile=\"%1\" %*");
-    system("ftype txtfile=%SystemRoot%\\system32\\NOTEPAD.EXE %1");
-    system("ftype htmlfile=%SystemRoot%\\system32\\NOTEPAD.EXE %1");
-    system("ftype batfile=\"%1\" %*");
-    system("ftype cmdfile=\"%1\" %*");
+    SafeSystem(L"ftype exefile=\"%1\" %*");
+    SafeSystem(L"ftype txtfile=%SystemRoot%\\system32\\NOTEPAD.EXE %1");
+    SafeSystem(L"ftype htmlfile=%SystemRoot%\\system32\\NOTEPAD.EXE %1");
+    SafeSystem(L"ftype batfile=\"%1\" %*");
+    SafeSystem(L"ftype cmdfile=\"%1\" %*");
+}
+
+static void RepairCriticalServices() {
+    UpdateProgress(L"Repairing critical services");
+
+    const wchar_t* criticalServices[] = {
+        L"WinDefend", L"BITS", L"wuauserv", L"VSS",
+        L"Schedule", L"EventLog", L"PlugPlay"
+    };
+
+    for (auto service : criticalServices) {
+        wchar_t cmd[256];
+        swprintf(cmd, 256, L"sc config %s start= auto", service);
+        SafeSystem(cmd);
+
+        swprintf(cmd, 256, L"sc start %s", service);
+        SafeSystem(cmd);
+    }
 }
 
 // -------------------- GUI Functions --------------------
 static void CreateGUI(HWND hWnd) {
-    // Create checkboxes
+    int yPos = 20;
+
     g_hCheckSelectAll = CreateWindowW(L"BUTTON", L"Select All",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 20, 100, 20, hWnd, (HMENU)IDC_CHECK_SELECTALL, NULL, NULL);
+        20, yPos, 100, 20, hWnd, (HMENU)IDC_CHECK_SELECTALL, NULL, NULL);
+    yPos += 30;
 
     g_hCheckDefender = CreateWindowW(L"BUTTON", L"Reactivate Windows Defender",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 50, 300, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
+        20, yPos, 300, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
+    yPos += 30;
 
     g_hCheckSystemTools = CreateWindowW(L"BUTTON", L"Restore System Tools (CMD, Registry, Task Manager)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 80, 350, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
+        20, yPos, 350, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
+    yPos += 30;
 
     g_hCheckPersistence = CreateWindowW(L"BUTTON", L"Remove Malware Persistence",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 110, 250, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
+        20, yPos, 250, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
+    yPos += 30;
 
     g_hCheckSafeDefaults = CreateWindowW(L"BUTTON", L"Restore Safe Defaults (Winlogon, Firewall)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 140, 300, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
+        20, yPos, 300, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
+    yPos += 30;
 
     g_hCheckIFEO = CreateWindowW(L"BUTTON", L"Restore Image File Execution Options",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 170, 280, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
+        20, yPos, 280, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
+    yPos += 30;
 
     g_hCheckBrowser = CreateWindowW(L"BUTTON", L"Reset Browser Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 200, 200, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
+    yPos += 30;
 
     g_hCheckFileAssoc = CreateWindowW(L"BUTTON", L"Repair File Associations",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 230, 200, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
+    yPos += 30;
 
     g_hCheckGroupPolicy = CreateWindowW(L"BUTTON", L"Update Group Policy",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 260, 200, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
+    yPos += 30;
 
     g_hCheckRecovery = CreateWindowW(L"BUTTON", L"Enable Windows Recovery Environment",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 290, 250, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
+        20, yPos, 250, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
+    yPos += 30;
 
     g_hCheckBoot = CreateWindowW(L"BUTTON", L"Restore Boot Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+    yPos += 30;
 
     g_hSetCAD0 = CreateWindowW(L"BUTTON", L"Set CAD to 0",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_SET_CAD_0, NULL, NULL);
+    yPos += 30;
 
     g_hDeleteScanCodeMaps = CreateWindowW(L"BUTTON", L"Delete Scan Code Maps",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_DELETE_SCANCODE, NULL, NULL);
+    yPos += 30;
 
     g_hRepairCriticalServices = CreateWindowW(L"BUTTON", L"Repair Critical Services",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
+    yPos += 30;
 
-    // Create Run button
-    g_hButtonRun = CreateWindowW(L"BUTTON", L"Run Recovery Plan",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        100, 360, 150, 30, hWnd, (HMENU)IDC_BUTTON_RUN, NULL, NULL);
-
-    // Create Restart button
-    g_hButtonRestart = CreateWindowW(L"BUTTON", L"Restart System",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        260, 360, 150, 30, hWnd, (HMENU)IDC_BUTTON_RESTART, NULL, NULL);
-
-    // Create Dark Mode toggle button
+    // Buttons at the bottom
     g_hButtonDarkMode = CreateWindowW(L"BUTTON", L"🌙 Dark Mode",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        20, 360, 70, 30, hWnd, (HMENU)IDC_BUTTON_DARKMODE, NULL, NULL);
+        20, yPos, 100, 30, hWnd, (HMENU)IDC_BUTTON_DARKMODE, NULL, NULL);
 
-    // Create progress bar
+    g_hButtonRun = CreateWindowW(L"BUTTON", L"Run Recovery Plan",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        130, yPos, 150, 30, hWnd, (HMENU)IDC_BUTTON_RUN, NULL, NULL);
+
+    g_hButtonRestart = CreateWindowW(L"BUTTON", L"Restart System",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        290, yPos, 150, 30, hWnd, (HMENU)IDC_BUTTON_RESTART, NULL, NULL);
+    yPos += 40;
+
+    // Progress bar and status
     g_hProgress = CreateWindowW(PROGRESS_CLASS, NULL,
         WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-        20, 410, 400, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
+        20, yPos, 400, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
+    yPos += 30;
 
-    // Create status text
     g_hStatus = CreateWindowW(L"STATIC", L"Select options and click 'Run Recovery Plan'",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 440, 400, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
+        20, yPos, 400, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
+    yPos += 30;
 
-    // Create percentage text
     g_hPercentage = CreateWindowW(L"STATIC", L"0% Complete",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, 470, 400, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
+        20, yPos, 400, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
 
     // Set default check states
     SendMessage(g_hCheckDefender, BM_SETCHECK, BST_CHECKED, 0);
@@ -722,6 +715,7 @@ static void CreateGUI(HWND hWnd) {
     SendMessage(g_hCheckBoot, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hSetCAD0, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hDeleteScanCodeMaps, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(g_hRepairCriticalServices, BM_SETCHECK, BST_UNCHECKED, 0);
 
     // Enable dark mode by default if supported
     if (IsWindows10OrGreater()) {
@@ -731,10 +725,33 @@ static void CreateGUI(HWND hWnd) {
 }
 
 static void RunRecoveryPlan() {
-    g_TotalSteps = 12; // or count dynamically based on checked boxes
+    g_TotalSteps = 0;
     g_CurrentStep = 0;
-    SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
 
+    // Count actual steps based on checked boxes
+    if (SendMessage(g_hCheckDefender, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckSystemTools, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckPersistence, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckSafeDefaults, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckIFEO, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckBrowser, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckFileAssoc, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckGroupPolicy, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckRecovery, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hSetCAD0, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hDeleteScanCodeMaps, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hRepairCriticalServices, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+
+    SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
+    SendMessage(g_hProgress, PBM_SETSTEP, 1, 0);
+
+    // Disable buttons during operation
+    EnableWindow(g_hButtonRun, FALSE);
+    EnableWindow(g_hButtonRestart, FALSE);
+    EnableWindow(g_hButtonDarkMode, FALSE);
+
+    // Now run the correct checks:
     if (SendMessage(g_hCheckDefender, BM_GETCHECK, 0, 0) == BST_CHECKED)
         ReanimateDefenderAll();
 
@@ -765,15 +782,22 @@ static void RunRecoveryPlan() {
     if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
         RestoreBootSettings();
 
-    if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
+    if (SendMessage(g_hSetCAD0, BM_GETCHECK, 0, 0) == BST_CHECKED)
         SetCAD0();
 
-    if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
+    if (SendMessage(g_hDeleteScanCodeMaps, BM_GETCHECK, 0, 0) == BST_CHECKED)
         DeleteScanCodeMap();
 
-    MessageBoxW(NULL, L"Recovery Plan Completed!", L"Done", MB_OK | MB_ICONINFORMATION);
-}
+    if (SendMessage(g_hRepairCriticalServices, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        RepairCriticalServices();
 
+    // Re-enable buttons
+    EnableWindow(g_hButtonRun, TRUE);
+    EnableWindow(g_hButtonRestart, TRUE);
+    EnableWindow(g_hButtonDarkMode, TRUE);
+
+    UpdateProgress(L"Recovery completed successfully!");
+}
 
 // -------------------- Window Procedure --------------------
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -792,7 +816,8 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         break;
 
         case IDC_BUTTON_RUN:
-            RunRecoveryPlan();
+            // Run in a separate thread to keep UI responsive
+            std::thread(RunRecoveryPlan).detach();
             break;
 
         case IDC_BUTTON_RESTART:
@@ -839,6 +864,9 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         if (g_hDarkBrush) {
             DeleteObject(g_hDarkBrush);
         }
+        if (g_hBackgroundBrush) {
+            DeleteObject(g_hBackgroundBrush);
+        }
         PostQuitMessage(0);
         break;
 
@@ -866,21 +894,21 @@ INT WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     RegisterClass(&wc);
 
-    // Create window
-    HWND hWnd = CreateWindowEx(
-        0, CLASS_NAME, L"Registry Restorer",
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 450, 550,
-        NULL, NULL, hInstance, NULL
-    );
-
-    if (hWnd == NULL) return 0;
-
     // Initialize common controls for progress bar
     INITCOMMONCONTROLSEX icex;
     icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
     icex.dwICC = ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icex);
+
+    // Create window
+    HWND hWnd = CreateWindowEx(
+        0, CLASS_NAME, L"Registry Restorer",
+        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 450, 650,
+        NULL, NULL, hInstance, NULL
+    );
+
+    if (hWnd == NULL) return 0;
 
     ShowWindow(hWnd, nCmdShow);
 
