@@ -86,9 +86,7 @@ dentification Markers: Creates a log file in C:\Windows\Temp\regrestorer.txt and
 
 Right-click on RegRestorer.exe and select "Run as administrator".
 
-Read the information dialog carefully and click OK.
-
-Read the final warning and confirm by clicking Yes.
+Choose Whatever you Need to Repair
 
 The tool will execute its functions, showing progress dialogs.
 
@@ -103,6 +101,9 @@ Reverting system policies locked by ransomware or hijackers.
 Forensic analysis and preparation of a compromised system.
 
 Advanced troubleshooting of deep system setting corruption.
+
+For Futher Clarification Here is the Tria.ge Analysis
+[Tria.ge Analysis](https://tria.ge/250907-r3aj7asycx)
 
 
 Author: Security Enthusiast
