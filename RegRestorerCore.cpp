@@ -42,6 +42,7 @@
 #define IDC_SET_CAD_0 111
 #define IDC_DELETE_SCANCODE 112
 #define IDC_REPAIR_SERVICES 113
+#define IDC_RESTORE_UAC_PROMPT 114
 #define IDC_BUTTON_RUN 201
 #define IDC_BUTTON_RESTART 202
 #define IDC_PROGRESS 301
@@ -52,7 +53,7 @@
 HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
 HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
 HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage, g_hDeleteScanCodeMaps,
-g_hSetCAD0, g_hRepairCriticalServices;
+g_hSetCAD0, g_hRepairCriticalServices, g_hRestoreUACPrompt, g_hUpdateProgress;
 HWND g_hButtonDarkMode;
 int g_TotalSteps = 0;
 int g_CurrentStep = 0;
@@ -60,7 +61,44 @@ bool g_DarkMode = false;
 HBRUSH g_hDarkBrush = NULL;
 HBRUSH g_hBackgroundBrush = NULL;
 
+static void UpdateProgress(const wchar_t* status);
+
 // -------------------- Utility Functions --------------------
+static void RestoreUACPrompt() {
+    UpdateProgress(L"Restoring UAC Elevation Prompts");
+    // Standard UAC settings for security
+    DWORD enableLUA = 1;           // Enable User Account Control
+    DWORD consentAdmin = 5;        // Prompt for consent for non-Windows binaries (most secure)
+    DWORD consentUser = 3;         // Prompt for credentials for standard users
+    DWORD secureDesktop = 1;       // Enable secure desktop
+    DWORD notifyElevation = 1;     // Notify elevation requests
+    DWORD virtualizeFiles = 1;     // Enable file and registry virtualization
+
+    const wchar_t* subKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
+
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subKey, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegSetValueExW(hKey, L"EnableLUA", 0, REG_DWORD, (BYTE*)&enableLUA, sizeof(enableLUA));
+        RegSetValueExW(hKey, L"ConsentPromptBehaviorAdmin", 0, REG_DWORD, (BYTE*)&consentAdmin, sizeof(consentAdmin));
+        RegSetValueExW(hKey, L"ConsentPromptBehaviorUser", 0, REG_DWORD, (BYTE*)&consentUser, sizeof(consentUser));
+        RegSetValueExW(hKey, L"PromptOnSecureDesktop", 0, REG_DWORD, (BYTE*)&secureDesktop, sizeof(secureDesktop));
+        RegSetValueExW(hKey, L"EnableInstallerDetection", 0, REG_DWORD, (BYTE*)&notifyElevation, sizeof(notifyElevation));
+        RegSetValueExW(hKey, L"EnableVirtualization", 0, REG_DWORD, (BYTE*)&virtualizeFiles, sizeof(virtualizeFiles));
+        RegCloseKey(hKey);
+    }
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, subKey, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegSetValueExW(hKey, L"EnableLUA", 0, REG_DWORD, (BYTE*)&enableLUA, sizeof(enableLUA));
+        RegSetValueExW(hKey, L"ConsentPromptBehaviorAdmin", 0, REG_DWORD, (BYTE*)&consentAdmin, sizeof(consentAdmin));
+        RegSetValueExW(hKey, L"ConsentPromptBehaviorUser", 0, REG_DWORD, (BYTE*)&consentUser, sizeof(consentUser));
+        RegSetValueExW(hKey, L"PromptOnSecureDesktop", 0, REG_DWORD, (BYTE*)&secureDesktop, sizeof(secureDesktop));
+        RegSetValueExW(hKey, L"EnableInstallerDetection", 0, REG_DWORD, (BYTE*)&notifyElevation, sizeof(notifyElevation));
+        RegSetValueExW(hKey, L"EnableVirtualization", 0, REG_DWORD, (BYTE*)&virtualizeFiles, sizeof(virtualizeFiles));
+        RegCloseKey(hKey);
+    }
+}
+
+
 int SafeSystem(const wchar_t* cmd) {
     if (!cmd) return -1;
     return _wsystem(cmd);
@@ -88,7 +126,7 @@ bool WriteRegString(HKEY root, LPCWSTR subKey, LPCWSTR name, LPCWSTR value) {
     return ok;
 }
 
-static void UpdateProgress(const wchar_t* status);
+
 
 // -------------------- Windows Version Check --------------------
 static bool IsWindows10OrGreater() {
@@ -153,7 +191,7 @@ static void EnableDarkMode(HWND hWnd) {
         g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hSetCAD0,
-        g_hDeleteScanCodeMaps, g_hRepairCriticalServices,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,
         g_hButtonRun, g_hButtonRestart, g_hProgress, g_hButtonDarkMode,
         g_hStatus, g_hPercentage
     };
@@ -180,7 +218,7 @@ static void DisableDarkMode(HWND hWnd) {
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
         g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0,
-        g_hDeleteScanCodeMaps, g_hRepairCriticalServices,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,
         g_hStatus, g_hPercentage
     };
 
@@ -213,21 +251,21 @@ static void SetRegValueForHives(const wchar_t* subKey, const wchar_t* valueName,
 
 // -------------------- Update Progress --------------------
 static void UpdateProgress(const wchar_t* status) {
-    SendMessage(g_hProgress, PBM_STEPIT, 0, 0);
-    g_CurrentStep++;
+    if (g_TotalSteps > 0) {
+        SendMessage(g_hProgress, PBM_STEPIT, 0, 0);
+        g_CurrentStep++;
 
-    int percentage = (g_CurrentStep * 100) / g_TotalSteps;
+        int percentage = (g_CurrentStep * 100) / g_TotalSteps;
 
-    wchar_t progressText[256];
-    wchar_t percentageText[256];
+        wchar_t progressText[256];
+        wchar_t percentageText[256];
 
-    swprintf(progressText, 256, L"Step %d/%d: %s", g_CurrentStep, g_TotalSteps, status);
-    swprintf(percentageText, 256, L"%d%% Complete", percentage);
+        swprintf(progressText, 256, L"Step %d/%d: %s", g_CurrentStep, g_TotalSteps, status);
+        swprintf(percentageText, 256, L"%d%% Complete", percentage);
 
-    SetWindowText(g_hStatus, progressText);
-    SetWindowText(g_hPercentage, percentageText);
-    UpdateWindow(g_hStatus);
-    UpdateWindow(g_hPercentage);
+        SetWindowText(g_hStatus, progressText);
+        SetWindowText(g_hPercentage, percentageText);
+    }
 
     // Process messages to keep UI responsive
     MSG msg;
@@ -235,6 +273,9 @@ static void UpdateProgress(const wchar_t* status) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+
+    // Small delay to allow user to see progress
+    Sleep(50);
 }
 
 // -------------------- Toggle All Checkboxes --------------------
@@ -243,7 +284,7 @@ static void ToggleAllCheckboxes(bool state) {
         g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser,
         g_hCheckFileAssoc, g_hCheckGroupPolicy, g_hCheckRecovery,
-        g_hCheckBoot, g_hSetCAD0, g_hDeleteScanCodeMaps, g_hRepairCriticalServices
+        g_hCheckBoot, g_hSetCAD0, g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt
     };
 
     for (HWND checkbox : checkboxes) {
@@ -586,16 +627,28 @@ static void RepairCriticalServices() {
 
     const wchar_t* criticalServices[] = {
         L"WinDefend", L"BITS", L"wuauserv", L"VSS",
-        L"Schedule", L"EventLog", L"PlugPlay"
+        L"Schedule", L"EventLog", L"PlugPlay", L"RpcSs",
+        L"DcomLaunch", L"Winmgmt", L"CryptSvc", L"LanmanServer",
+        L"LanmanWorkstation", L"Netlogon", L"SamSs"
     };
 
     for (auto service : criticalServices) {
-        wchar_t cmd[256];
-        swprintf(cmd, 256, L"sc config %s start= auto", service);
+        wchar_t cmd[512];
+
+        // Set to auto-start
+        swprintf(cmd, 512, L"sc config %s start= auto", service);
         SafeSystem(cmd);
 
-        swprintf(cmd, 256, L"sc start %s", service);
+        // Set recovery actions
+        swprintf(cmd, 512, L"sc failure %s reset= 30 actions= restart/5000", service);
         SafeSystem(cmd);
+
+        // Start the service
+        swprintf(cmd, 512, L"sc start %s", service);
+        SafeSystem(cmd);
+
+        // Brief pause to avoid overwhelming the system
+        Sleep(100);
     }
 }
 
@@ -673,6 +726,12 @@ static void CreateGUI(HWND hWnd) {
         20, yPos, 200, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
     yPos += 30;
 
+    g_hRestoreUACPrompt = CreateWindowW(L"BUTTON", L"Repair UAC",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, yPos, 200, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
+    yPos += 30;
+
+
     // Buttons at the bottom
     g_hButtonDarkMode = CreateWindowW(L"BUTTON", L"🌙 Dark Mode",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -716,6 +775,7 @@ static void CreateGUI(HWND hWnd) {
     SendMessage(g_hSetCAD0, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hDeleteScanCodeMaps, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hRepairCriticalServices, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(g_hRestoreUACPrompt, BM_SETCHECK, BST_UNCHECKED, 0);
 
     // Enable dark mode by default if supported
     if (IsWindows10OrGreater()) {
@@ -742,6 +802,7 @@ static void RunRecoveryPlan() {
     if (SendMessage(g_hSetCAD0, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hDeleteScanCodeMaps, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hRepairCriticalServices, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hRestoreUACPrompt, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
 
     SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
     SendMessage(g_hProgress, PBM_SETSTEP, 1, 0);
@@ -790,6 +851,9 @@ static void RunRecoveryPlan() {
 
     if (SendMessage(g_hRepairCriticalServices, BM_GETCHECK, 0, 0) == BST_CHECKED)
         RepairCriticalServices();
+
+    if (SendMessage(g_hRestoreUACPrompt, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        RestoreUACPrompt();
 
     // Re-enable buttons
     EnableWindow(g_hButtonRun, TRUE);
