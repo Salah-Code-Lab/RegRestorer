@@ -13,7 +13,6 @@
 #include <vector>
 #include <commctrl.h>
 #include <uxtheme.h>
-#include "RegRestorerCore.h"
 #include <dwmapi.h>
 
 #pragma comment(lib, "netapi32.lib")
@@ -22,6 +21,7 @@
 #pragma comment(lib, "userenv.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "uxtheme.lib")
+
 
 // -------------------- Constants --------------------
 #define IDC_CHECK_SELECTALL 100
@@ -42,7 +42,28 @@
 #define IDC_PERCENTAGE 303
 #define IDC_BUTTON_DARKMODE 304
 
+static void UpdateProgress(const wchar_t* status);
+
 // -------------------- Global Variables --------------------
+
+static void RepairCriticalServices() {
+    UpdateProgress(L"Repairing critical services");
+
+    const wchar_t* criticalServices[] = {
+        L"WinDefend", L"BITS", L"wuauserv", L"VSS",
+        L"Schedule", L"EventLog", L"PlugPlay"
+    };
+
+    for (auto service : criticalServices) {
+        wchar_t cmd[256];
+        swprintf(cmd, 256, L"sc config %s start= auto", service);
+        _wsystem(cmd);
+
+        swprintf(cmd, 256, L"sc start %s", service);
+        _wsystem(cmd);
+    }
+}
+
 
 static bool IsWindows10OrGreater() {
     OSVERSIONINFOEXW osvi = { 0 };
@@ -64,7 +85,8 @@ static bool IsWindows10OrGreater() {
 
 HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
 HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
-HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage;
+HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage, g_hDeleteScanCodeMaps,
+g_hSetCAD0, g_hRepairCriticalServices;
 HWND g_hButtonDarkMode;
 int g_TotalSteps = 0;
 int g_CurrentStep = 0;
@@ -148,7 +170,7 @@ static void DisableDarkMode(HWND hWnd) {
         g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
-        g_hButtonRestart, g_hProgress, g_hButtonDarkMode
+        g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0, g_hDeleteScanCodeMaps
     };
 
     for (HWND ctrl : controls)
@@ -264,6 +286,9 @@ static void ToggleAllCheckboxes(bool state) {
     SendMessage(g_hCheckGroupPolicy, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(g_hCheckRecovery, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
     SendMessage(g_hCheckBoot, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(g_hSetCAD0, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessage(g_hRepairCriticalServices, BM_SETCHECK, state ? BST_CHECKED : BST_UNCHECKED, 0);
+    
 }
 
 
@@ -439,6 +464,24 @@ static void RestoreBootSettings() {
     }
 }
 
+// Delete Scancode Map
+static void DeleteScanCodeMap() {
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, L"Scancode Map");
+        RegCloseKey(hKey);
+    }
+};
+
+// Set CAD to 0
+static void SetCAD0() {
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        DWORD val = 0;
+        RegSetValueExW(hKey, L"DisableCAD", 0, REG_DWORD, (BYTE*)&val, sizeof(val));
+        RegCloseKey(hKey);
+    }
+}
 // -------------------- Expanded Persistence Protection --------------------
 static void ProtectRunKeys() {
     UpdateProgress(L"Removing Malware Persistence");
@@ -624,6 +667,18 @@ static void CreateGUI(HWND hWnd) {
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
 
+    g_hSetCAD0 = CreateWindowW(L"BUTTON", L"Set CAD to 0",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+
+    g_hDeleteScanCodeMaps = CreateWindowW(L"BUTTON", L"Delete Scan Code Maps",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+
+    g_hRepairCriticalServices = CreateWindowW(L"BUTTON", L"Repair Critical Services",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, 320, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+
     // Create Run button
     g_hButtonRun = CreateWindowW(L"BUTTON", L"Run Recovery Plan",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -665,6 +720,8 @@ static void CreateGUI(HWND hWnd) {
     SendMessage(g_hCheckGroupPolicy, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hCheckRecovery, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hCheckBoot, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(g_hSetCAD0, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(g_hDeleteScanCodeMaps, BM_SETCHECK, BST_UNCHECKED, 0);
 
     // Enable dark mode by default if supported
     if (IsWindows10OrGreater()) {
@@ -674,7 +731,7 @@ static void CreateGUI(HWND hWnd) {
 }
 
 static void RunRecoveryPlan() {
-    g_TotalSteps = 10; // or count dynamically based on checked boxes
+    g_TotalSteps = 12; // or count dynamically based on checked boxes
     g_CurrentStep = 0;
     SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
 
@@ -707,6 +764,12 @@ static void RunRecoveryPlan() {
 
     if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
         RestoreBootSettings();
+
+    if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        SetCAD0();
+
+    if (SendMessage(g_hCheckBoot, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        DeleteScanCodeMap();
 
     MessageBoxW(NULL, L"Recovery Plan Completed!", L"Done", MB_OK | MB_ICONINFORMATION);
 }
