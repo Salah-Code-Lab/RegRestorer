@@ -101,3 +101,10 @@ Advanced troubleshooting of deep system setting corruption.
 # 📄 Additional References
 
 Tria.ge Analysis: https://tria.ge/250907-r3aj7asycx
+
+Author: Security Enthusiast
+
+Version: 1.3
+
+License: Provided for legitimate recovery and educational purposes only.
+
