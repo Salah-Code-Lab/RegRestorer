@@ -3,109 +3,101 @@
 
 # 🚨 Disclaimer & Warning
 
-RegRestorer is a powerful system utility designed for critical recovery scenarios. It performs deep, invasive modifications to the Windows Registry to revert settings to Microsoft defaults and remove persistent malware artifacts.
+RegRestorer is a highly invasive system utility designed for extreme recovery scenarios. It performs deep modifications to the Windows Registry to revert settings to Microsoft defaults and remove persistent malware artifacts.
 
-USE AT YOUR OWN EXTREME RISK. Improper use can render your system unstable or unusable.
+USE AT YOUR OWN EXTREME RISK. Improper use can render your system unstable or completely unusable.
 
-This tool is NOT for casual use. It is intended for advanced users, system administrators, and security professionals.
+This tool is NOT intended for casual users. It is designed for advanced users, system administrators, and security professionals.
 
-WILL TRIGGER ANTIVIRUS DETECTIONS. Its actions mimic advanced malware. These are false positives but are expected. Review the source code for transparency.
+Will Trigger Antivirus Detections: Its actions mimic advanced malware. These are false positives but are expected. Review the source code to confirm transparency.
 
-ALWAYS HAVE BACKUPS. Ensure you have backups of important data and a system restore point before proceeding.
+Always Have Backups: Ensure you have backups of important data and a system restore point before proceeding.
 
 # 📖 Overview
 
-RegRestorer is a C++ application that acts as a "nuclear option" for repairing a Windows system compromised by malware, ransomware, or system hijackers. It focuses exclusively on undoing malicious registry modifications that are commonly used for persistence, disabling security, and maintaining control over a victim's machine.
+RegRestorer is a C++ application acting as a “nuclear option” for repairing Windows systems compromised by malware, ransomware, or hijackers. It focuses exclusively on undoing malicious registry modifications commonly used for persistence, disabling security, or maintaining control over a machine.
 
-⚡ Core Capabilities
-1. Persistence Removal (The "Nuke")
-
-Advanced Persistence: Targets and reverts sophisticated malware techniques:
+# ⚡ Core Capabilities
+Persistence Removal (The "Nuke")
 
 Image File Execution Options (IFEO): Removes debugger hijacks for explorer.exe, svchost.exe, winlogon.exe, and lsass.exe.
 
- Winlogon Notify: Cleans malicious DLLs loaded via the Notification Packages value.
+Winlogon Notify: Cleans malicious DLLs loaded via Notification Packages.
 
-File Association Hijacking: Restores correct commands for .exe, .txt, .cmd, .bat, and .lnk files.
+File Association Hijacking: Restores default commands for .exe, .txt, .cmd, .bat, and .lnk.
 
-# Security Policy & Service Restoration
+Security Policy & Service Restoration
 
-Re-enables Task Manager, Registry Editor, Command Prompt, and PowerShell by removing DisableTaskMgr, DisableRegistryTools, DisableCMD, and DisablePowerShell policies.
+Re-enables Task Manager, Registry Editor, Command Prompt, and PowerShell by removing DisableTaskMgr, DisableRegistryTools, DisableCMD, and DisablePowerShell.
 
-Restores User Account Control (UAC) to its default prompting behavior.
+Restores User Account Control (UAC) to default behavior.
 
-
-# Windows Defender Reanimation
-
-Re-enables Windows Defender by resetting critical registry keys that malware disables:
+Windows Defender Reanimation
 
 Turns ON Tamper Protection, Real-Time Protection, PUA Protection, and cloud-based Spynet reporting.
 
 Turns OFF DisableAntiSpyware and DisableAntiVirus switches.
 
-Applies these settings to both HKEY_LOCAL_MACHINE and HKEY_CURRENT_USER.
+Applies these changes to both HKEY_LOCAL_MACHINE and HKEY_CURRENT_USER.
 
-# System Component Repair
+System Component Repair
 
 Restores Windows Time Service to use the legitimate w32time.dll.
 
-Resets SSDPSRV service to its correct DLL path.
+Resets SSDPSRV service to correct DLL path.
 
 Purges malicious Netsh helper registrations.
 
 Resets keyboard layouts by removing malicious Scancode Map configurations.
 
-Restores Safe Mode configurations to default values.
+Restores Safe Mode settings to default.
 
-Re-enables the Windows Recovery Environment (WinRE) via reagentc /enable.
+Re-enables Windows Recovery Environment (WinRE) via reagentc /enable.
 
-Ensures critical services (Windows Update, Security Center, BITS, Defender) are set to start automatically.
+Ensures critical services (Windows Update, Security Center, BITS, Defender) start automatically.
 
-# System Stability & UI Restoration
+System Stability & UI Restoration
 
-Restores the default logon background and mouse button configuration.
+Restores default logon background and mouse configuration.
 
-Resets browser group policies for Microsoft Edge, Google Chrome, and Mozilla Firefox by deleting their policy keys.
-Ensures the Windows Boot Manager (BootStatusPolicy) and Boot Configuration Data (DebugEnabled) are set to normal values.
+Resets browser group policies for Edge, Chrome, and Firefox.
 
-Enables System File Checker (SFC) by setting SFCDisabled to 0.
+Resets Windows Boot Manager (BootStatusPolicy) and BCD DebugEnabled to normal values.
 
-## 🛡️ Legitimacy & Transparency Features
+Re-enables System File Checker (SFC) by setting SFCDisabled to 0.
 
-No Network Activity: The tool performs all operations locally; it does not connect to the internet.
+# 🛡️ Legitimacy & Transparency Features
 
-Source Availability: The full C++ source code is available for review to confirm its intentions.
+No Network Activity: All operations are local; no internet connection is required.
 
- User Consent: Requires explicit administrator privileges and user confirmation before making any changes.
+Source Availability: Full C++ source code available for review.
 
-dentification Markers: Creates a log file in C:\Windows\Temp\regrestorer.txt and a registry key to identify itself as a legitimate recovery tool.
+User Consent: Requires administrator privileges and explicit confirmation.
 
-## 🚀 Usage
+Identification Markers: Creates a log at C:\Windows\Temp\regrestorer.txt and a registry key for verification.
 
- Back up your important data.
+# 🚀 Usage
 
-Right-click on RegRestorer.exe and select "Run as administrator".
+Back up all important data.
 
-Choose Whatever you Need to Repair
+Right-click RegRestorer.exe → Run as administrator.
 
-The tool will execute its functions, showing progress dialogs.
+Select the functions you need to repair.
 
-Once complete, a system restart is highly recommended to ensure all changes take full effect.
+The tool executes, showing progress dialogs.
+
+Restart the system to ensure all changes take effect.
 
 # 🔧 Intended Use Cases
 
-Remediating systems infected with persistent malware that survives normal scans.
+Remediating systems with persistent malware surviving normal scans.
 
 Reverting system policies locked by ransomware or hijackers.
 
-Forensic analysis and preparation of a compromised system.
+Preparing a compromised system for forensic analysis.
 
 Advanced troubleshooting of deep system setting corruption.
 
-For Futher Clarification Here is the Tria.ge Analysis
-[Tria.ge Analysis](https://tria.ge/250907-r3aj7asycx)
+# 📄 Additional References
 
-
-Author: Security Enthusiast
-Version: 1.0
-License: Tool provided for legitimate recovery and educational purposes.
+Tria.ge Analysis: https://tria.ge/250907-r3aj7asycx
