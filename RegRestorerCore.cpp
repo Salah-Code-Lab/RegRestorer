@@ -43,6 +43,7 @@
 #define IDC_DELETE_SCANCODE 112
 #define IDC_REPAIR_SERVICES 113
 #define IDC_RESTORE_UAC_PROMPT 114
+#define IDC_RESTORE_BOOT_MGR 115
 #define IDC_BUTTON_RUN 201
 #define IDC_BUTTON_RESTART 202
 #define IDC_PROGRESS 301
@@ -53,7 +54,7 @@
 HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
 HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
 HWND g_hCheckRecovery, g_hCheckBoot, g_hButtonRun, g_hButtonRestart, g_hProgress, g_hStatus, g_hPercentage, g_hDeleteScanCodeMaps,
-g_hSetCAD0, g_hRepairCriticalServices, g_hRestoreUACPrompt, g_hUpdateProgress;
+g_hSetCAD0, g_hRepairCriticalServices, g_hRestoreUACPrompt, g_hUpdateProgress, g_hRestoreBootMgr;
 HWND g_hButtonDarkMode;
 int g_TotalSteps = 0;
 int g_CurrentStep = 0;
@@ -62,6 +63,67 @@ HBRUSH g_hDarkBrush = NULL;
 HBRUSH g_hBackgroundBrush = NULL;
 
 static void UpdateProgress(const wchar_t* status);
+
+// Define LogMessage
+HANDLE g_hLogFile = INVALID_HANDLE_VALUE;
+
+// Function to get a string representation of the HKEY
+const wchar_t* HkeyToString(HKEY hKey) {
+    if (hKey == HKEY_LOCAL_MACHINE) return L"HKLM";
+    if (hKey == HKEY_CURRENT_USER) return L"HKCU";
+    if (hKey == HKEY_CLASSES_ROOT) return L"HKCR";
+    if (hKey == HKEY_USERS) return L"HKU";
+    if (hKey == HKEY_CURRENT_CONFIG) return L"HKCC";
+    return L"UNKNOWN";
+}
+
+// The core logging function. It logs to a file and to the debug output.
+void LogMessage(const wchar_t* format, ...) {
+    // Don't try to log if the file isn't open
+    if (g_hLogFile == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+
+    wchar_t buffer[1024];
+    va_list args;
+
+    // 1. Format the timestamp
+    int len = swprintf_s(buffer, _countof(buffer), L"[%02d:%02d:%02d.%03d] ",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+
+    // 2. Format the user's message
+    va_start(args, format);
+    vswprintf_s(buffer + len, _countof(buffer) - len, format, args);
+    va_end(args);
+
+    // 3. Ensure Windows line endings
+    wcscat_s(buffer, _countof(buffer), L"\r\n");
+
+    // 4. Write to the log file
+    DWORD bytesWritten;
+    WriteFile(g_hLogFile, buffer, (DWORD)(wcslen(buffer) * sizeof(wchar_t)), &bytesWritten, NULL);
+
+    // 5. Also send to debugger (viewable with DebugView, etc.)
+    OutputDebugStringW(buffer);
+}
+
+// Helper function to log registry operations clearly
+void LogRegOperation(const wchar_t* operation, HKEY root, LPCWSTR subKey, LPCWSTR valueName, const wchar_t* status, LONG errorCode) {
+    if (valueName && valueName[0] != L'\0') {
+        LogMessage(L"%s: %s\\%s\\%s - %s (0x%08X)", operation, HkeyToString(root), subKey, valueName, status, errorCode);
+    }
+    else {
+        LogMessage(L"%s: %s\\%s - %s (0x%08X)", operation, HkeyToString(root), subKey, status, errorCode);
+    }
+}
+
+// Helper function to log system command execution
+void LogSystemCommand(const wchar_t* command, int returnCode) {
+    LogMessage(L"CMD: '%s' -> Exit Code: %d", command, returnCode);
+}
 
 // -------------------- Utility Functions --------------------
 static void RestoreUACPrompt() {
@@ -96,6 +158,43 @@ static void RestoreUACPrompt() {
         RegSetValueExW(hKey, L"EnableVirtualization", 0, REG_DWORD, (BYTE*)&virtualizeFiles, sizeof(virtualizeFiles));
         RegCloseKey(hKey);
     }
+}
+
+
+
+
+static void RestoreBootMgrPath() {
+    UpdateProgress(L"Restoring Boot Manager Path");
+
+
+    HKEY hKey = nullptr;
+    const wchar_t* correctBootMgrPath = L"\\bootmgr"; // The standard, correct path
+
+    // The key targeted by the malware
+    LONG lResult = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\BootOptions",
+        0,
+        KEY_WRITE,
+        &hKey);
+
+    if (lResult == ERROR_SUCCESS) {
+        // Set the correct value
+        lResult = RegSetValueExW(hKey,
+            L"BootMgr", // The value name the malware corrupted
+            0,
+            REG_SZ,
+            (const BYTE*)correctBootMgrPath,
+            (wcslen(correctBootMgrPath) + 1) * sizeof(wchar_t));
+
+    if (lResult == ERROR_SUCCESS) {
+            LogMessage(L"SUCCESS: Restored BootMgr path to: %s", correctBootMgrPath);
+        }
+        RegCloseKey(hKey);
+    }
+    else {
+        LogMessage(L"FAILURE: Could not open BootOptions key to restore BootMgr. Error: 0x%08X", lResult);
+    }
+    // Note: We don't stop on failure. We log it and continue the recovery plan.
 }
 
 
@@ -191,7 +290,7 @@ static void EnableDarkMode(HWND hWnd) {
         g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hSetCAD0,
-        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,g_hRestoreBootMgr,
         g_hButtonRun, g_hButtonRestart, g_hProgress, g_hButtonDarkMode,
         g_hStatus, g_hPercentage
     };
@@ -218,7 +317,7 @@ static void DisableDarkMode(HWND hWnd) {
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc,
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
         g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0,
-        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,
+        g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,g_hRestoreBootMgr,
         g_hStatus, g_hPercentage
     };
 
@@ -284,7 +383,7 @@ static void ToggleAllCheckboxes(bool state) {
         g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence,
         g_hCheckSafeDefaults, g_hCheckIFEO, g_hCheckBrowser,
         g_hCheckFileAssoc, g_hCheckGroupPolicy, g_hCheckRecovery,
-        g_hCheckBoot, g_hSetCAD0, g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt
+        g_hCheckBoot, g_hSetCAD0, g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt, g_hRestoreBootMgr
     };
 
     for (HWND checkbox : checkboxes) {
@@ -655,6 +754,7 @@ static void RepairCriticalServices() {
 // -------------------- GUI Functions --------------------
 static void CreateGUI(HWND hWnd) {
     int yPos = 20;
+    int buttonWidth = 400; // Increased width to fit longer text
 
     g_hCheckSelectAll = CreateWindowW(L"BUTTON", L"Select All",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
@@ -663,74 +763,78 @@ static void CreateGUI(HWND hWnd) {
 
     g_hCheckDefender = CreateWindowW(L"BUTTON", L"Reactivate Windows Defender",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 300, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
     yPos += 30;
 
     g_hCheckSystemTools = CreateWindowW(L"BUTTON", L"Restore System Tools (CMD, Registry, Task Manager)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 350, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
     yPos += 30;
 
     g_hCheckPersistence = CreateWindowW(L"BUTTON", L"Remove Malware Persistence",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 250, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
     yPos += 30;
 
     g_hCheckSafeDefaults = CreateWindowW(L"BUTTON", L"Restore Safe Defaults (Winlogon, Firewall)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 300, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
     yPos += 30;
 
     g_hCheckIFEO = CreateWindowW(L"BUTTON", L"Restore Image File Execution Options",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 280, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
     yPos += 30;
 
     g_hCheckBrowser = CreateWindowW(L"BUTTON", L"Reset Browser Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
     yPos += 30;
 
     g_hCheckFileAssoc = CreateWindowW(L"BUTTON", L"Repair File Associations",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
     yPos += 30;
 
     g_hCheckGroupPolicy = CreateWindowW(L"BUTTON", L"Update Group Policy",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
     yPos += 30;
 
     g_hCheckRecovery = CreateWindowW(L"BUTTON", L"Enable Windows Recovery Environment",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 250, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
     yPos += 30;
 
     g_hCheckBoot = CreateWindowW(L"BUTTON", L"Restore Boot Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
     yPos += 30;
 
     g_hSetCAD0 = CreateWindowW(L"BUTTON", L"Set CAD to 0",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_SET_CAD_0, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_SET_CAD_0, NULL, NULL);
     yPos += 30;
 
     g_hDeleteScanCodeMaps = CreateWindowW(L"BUTTON", L"Delete Scan Code Maps",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_DELETE_SCANCODE, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_DELETE_SCANCODE, NULL, NULL);
     yPos += 30;
 
     g_hRepairCriticalServices = CreateWindowW(L"BUTTON", L"Repair Critical Services",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
     yPos += 30;
 
     g_hRestoreUACPrompt = CreateWindowW(L"BUTTON", L"Repair UAC",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 200, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_RESTORE_UAC_PROMPT, NULL, NULL);
     yPos += 30;
 
+    g_hRestoreBootMgr = CreateWindowW(L"BUTTON", L"Redefine BootMgr Via Registry",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_RESTORE_BOOT_MGR, NULL, NULL);
+    yPos += 30;
 
     // Buttons at the bottom
     g_hButtonDarkMode = CreateWindowW(L"BUTTON", L"🌙 Dark Mode",
@@ -746,20 +850,20 @@ static void CreateGUI(HWND hWnd) {
         290, yPos, 150, 30, hWnd, (HMENU)IDC_BUTTON_RESTART, NULL, NULL);
     yPos += 40;
 
-    // Progress bar and status
+    // Progress bar and status - make progress bar wider too
     g_hProgress = CreateWindowW(PROGRESS_CLASS, NULL,
         WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-        20, yPos, 400, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
     yPos += 30;
 
     g_hStatus = CreateWindowW(L"STATIC", L"Select options and click 'Run Recovery Plan'",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, yPos, 400, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
     yPos += 30;
 
     g_hPercentage = CreateWindowW(L"STATIC", L"0% Complete",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, yPos, 400, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
+        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
 
     // Set default check states
     SendMessage(g_hCheckDefender, BM_SETCHECK, BST_CHECKED, 0);
@@ -776,6 +880,7 @@ static void CreateGUI(HWND hWnd) {
     SendMessage(g_hDeleteScanCodeMaps, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hRepairCriticalServices, BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessage(g_hRestoreUACPrompt, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessage(g_hRestoreBootMgr, BM_SETCHECK, BST_UNCHECKED, 0);
 
     // Enable dark mode by default if supported
     if (IsWindows10OrGreater()) {
@@ -803,6 +908,7 @@ static void RunRecoveryPlan() {
     if (SendMessage(g_hDeleteScanCodeMaps, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hRepairCriticalServices, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hRestoreUACPrompt, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
+    if (SendMessage(g_hRestoreBootMgr, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
 
     SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
     SendMessage(g_hProgress, PBM_SETSTEP, 1, 0);
@@ -854,6 +960,9 @@ static void RunRecoveryPlan() {
 
     if (SendMessage(g_hRestoreUACPrompt, BM_GETCHECK, 0, 0) == BST_CHECKED)
         RestoreUACPrompt();
+
+    if (SendMessage(g_hRestoreBootMgr, BM_GETCHECK, 0, 0) == BST_CHECKED)
+        RestoreBootMgrPath();
 
     // Re-enable buttons
     EnableWindow(g_hButtonRun, TRUE);
