@@ -74,8 +74,6 @@ Source Availability: Full C++ source code available for review.
 
 User Consent: Requires administrator privileges and explicit confirmation.
 
-Identification Markers: Creates a log at C:\Windows\Temp\regrestorer.txt and a registry key for verification.
-
 # 🚀 Usage
 
 Back up all important data.
