@@ -98,7 +98,7 @@ Advanced troubleshooting of deep system setting corruption.
 
 # 📄 Additional References
 
-Tria.ge Analysis: https://tria.ge/250907-r3aj7asycx
+Updated Tria.ge Analysis: https://tria.ge/250914-j128esttgs/behavioral1
 
 Author: Security Enthusiast
 
