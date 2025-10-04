@@ -19,6 +19,7 @@
 #include <iostream>
 #include <winternl.h>
 #include <strsafe.h>
+#include <shlobj.h>  // Add this for CSIDL_DESKTOP
 
 #pragma comment(lib, "netapi32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -50,6 +51,9 @@
 #define IDC_STATUS 302
 #define IDC_PERCENTAGE 303
 #define IDC_BUTTON_DARKMODE 304
+#define IDC_BUTTON_DIAGNOSTIC 305
+#define IDC_DIAGNOSTIC_RESULTS 306
+#define IDC_BUTTON_SAVE_REPORT 307
 
 HWND g_hCheckSelectAll, g_hCheckDefender, g_hCheckSystemTools, g_hCheckPersistence, g_hCheckSafeDefaults;
 HWND g_hCheckIFEO, g_hCheckBrowser, g_hCheckFileAssoc, g_hCheckGroupPolicy;
@@ -61,6 +65,10 @@ int g_CurrentStep = 0;
 bool g_DarkMode = false;
 HBRUSH g_hDarkBrush = NULL;
 HBRUSH g_hBackgroundBrush = NULL;
+
+HWND g_hButtonDiagnostic, g_hDiagnosticResults, g_hButtonSaveReport;
+std::vector<std::wstring> g_DiagnosticFindings;
+bool g_DiagnosticsRun = false;
 
 static void UpdateProgress(const wchar_t* status);
 
@@ -79,7 +87,6 @@ const wchar_t* HkeyToString(HKEY hKey) {
 
 // The core logging function. It logs to a file and to the debug output.
 void LogMessage(const wchar_t* format, ...) {
-    // Don't try to log if the file isn't open
     if (g_hLogFile == INVALID_HANDLE_VALUE) {
         return;
     }
@@ -90,23 +97,17 @@ void LogMessage(const wchar_t* format, ...) {
     wchar_t buffer[1024];
     va_list args;
 
-    // 1. Format the timestamp
     int len = swprintf_s(buffer, _countof(buffer), L"[%02d:%02d:%02d.%03d] ",
         st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 
-    // 2. Format the user's message
     va_start(args, format);
     vswprintf_s(buffer + len, _countof(buffer) - len, format, args);
     va_end(args);
 
-    // 3. Ensure Windows line endings
     wcscat_s(buffer, _countof(buffer), L"\r\n");
 
-    // 4. Write to the log file
     DWORD bytesWritten;
     WriteFile(g_hLogFile, buffer, (DWORD)(wcslen(buffer) * sizeof(wchar_t)), &bytesWritten, NULL);
-
-    // 5. Also send to debugger (viewable with DebugView, etc.)
     OutputDebugStringW(buffer);
 }
 
@@ -125,16 +126,540 @@ void LogSystemCommand(const wchar_t* command, int returnCode) {
     LogMessage(L"CMD: '%s' -> Exit Code: %d", command, returnCode);
 }
 
+// Diagnostic check structure
+struct DiagnosticCheck {
+    const wchar_t* name;
+    const wchar_t* description;
+    bool (*checkFunction)();
+    int relatedCheckboxID;
+    bool isCorrupted;
+};
+
+// Forward declarations for diagnostic functions
+bool CheckDefenderStatus();
+bool CheckTaskManager();
+bool CheckCMDAccess();
+bool CheckUACSettings();
+bool CheckRegistryTools();
+bool CheckPowershell();
+bool CheckSafeBoot();
+bool CheckIFEO();
+bool CheckFileAssociations();
+bool CheckBootManager();
+bool CheckScancodeMap();
+bool CheckCriticalServices();
+bool CheckFirewall();
+bool CheckWinlogon();
+void AutoCheckRepairOptions();
+void ToggleAllCheckboxes(bool state);
+bool CheckGroupPolicy();
+
+// -------------------- Diagnostic Functions --------------------
+bool CheckDefenderStatus() {
+    HKEY hKey;
+    DWORD value = 1;
+    DWORD size = sizeof(DWORD);
+
+    const wchar_t* defenderPaths[] = {
+        L"SOFTWARE\\Policies\\Microsoft\\Windows Defender",
+        L"SOFTWARE\\Microsoft\\Windows Defender"
+    };
+
+    for (const auto& path : defenderPaths) {
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            if (RegQueryValueExW(hKey, L"DisableAntiSpyware", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExW(hKey, L"DisableRealtimeMonitoring", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+            RegCloseKey(hKey);
+            return false;
+        }
+        RegCloseKey(hKey);
+    }
+
+    return true;
+}
+
+bool CheckTaskManager() {
+    HKEY hKeys[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+
+    for (HKEY root : hKeys) {
+        HKEY hKey;
+        DWORD value = 0;
+        DWORD size = sizeof(DWORD);
+
+        if (RegOpenKeyExW(root,
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+            if (RegQueryValueExW(hKey, L"DisableTaskMgr", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckCMDAccess() {
+    HKEY hKeys[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+
+    for (HKEY root : hKeys) {
+        HKEY hKey;
+        DWORD value = 0;
+        DWORD size = sizeof(DWORD);
+
+        if (RegOpenKeyExW(root,
+            L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+            if (RegQueryValueExW(hKey, L"DisableCMD", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckUACSettings() {
+    HKEY hKey;
+    DWORD consentAdmin = 0;
+    DWORD enableLUA = 1;
+    DWORD size = sizeof(DWORD);
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        bool uacCorrupted = false;
+
+        if (RegQueryValueExW(hKey, L"ConsentPromptBehaviorAdmin", 0, NULL, (BYTE*)&consentAdmin, &size) == ERROR_SUCCESS) {
+            if (consentAdmin != 2 && consentAdmin != 5) {
+                uacCorrupted = true;
+            }
+        }
+
+        if (RegQueryValueExW(hKey, L"EnableLUA", 0, NULL, (BYTE*)&enableLUA, &size) == ERROR_SUCCESS) {
+            if (enableLUA == 0) {
+                uacCorrupted = true;
+            }
+        }
+
+        RegCloseKey(hKey);
+        return !uacCorrupted;
+    }
+    return false;
+}
+
+bool CheckRegistryTools() {
+    HKEY hKeys[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+
+    for (HKEY root : hKeys) {
+        HKEY hKey;
+        DWORD value = 0;
+        DWORD size = sizeof(DWORD);
+
+        if (RegOpenKeyExW(root,
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+            if (RegQueryValueExW(hKey, L"DisableRegistryTools", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckPowershell() {
+    HKEY hKeys[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+
+    for (HKEY root : hKeys) {
+        HKEY hKey;
+        DWORD value = 0;
+        DWORD size = sizeof(DWORD);
+
+        if (RegOpenKeyExW(root,
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+            if (RegQueryValueExW(hKey, L"DisablePowershell", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckSafeBoot() {
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\SafeBoot", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        bool hasMinimal = false;
+        bool hasNetwork = false;
+
+        HKEY hSubKey;
+        if (RegOpenKeyExW(hKey, L"Minimal", 0, KEY_READ, &hSubKey) == ERROR_SUCCESS) {
+            hasMinimal = true;
+            RegCloseKey(hSubKey);
+        }
+        if (RegOpenKeyExW(hKey, L"Network", 0, KEY_READ, &hSubKey) == ERROR_SUCCESS) {
+            hasNetwork = true;
+            RegCloseKey(hSubKey);
+        }
+
+        RegCloseKey(hKey);
+        return hasMinimal && hasNetwork;
+    }
+    return false;
+}
+
+bool CheckIFEO() {
+    const wchar_t* targetApps[] = {
+        L"explorer.exe", L"svchost.exe", L"winlogon.exe", L"taskmgr.exe",
+        L"regedit.exe", L"cmd.exe", L"powershell.exe", L"msconfig.exe"
+    };
+
+    for (const auto& app : targetApps) {
+        wchar_t keyPath[256];
+        swprintf(keyPath, 256, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\%s", app);
+
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            DWORD type, size = 0;
+            if (RegQueryValueExW(hKey, L"Debugger", 0, &type, NULL, &size) == ERROR_SUCCESS) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckFileAssociations() {
+    HKEY hKey;
+    wchar_t buffer[512];
+    DWORD size = sizeof(buffer);
+
+    const wchar_t* assocKeys[] = {
+        L"exefile\\shell\\open\\command",
+        L"cmdfile\\shell\\open\\command",
+        L"batfile\\shell\\open\\command"
+    };
+
+    for (const auto& key : assocKeys) {
+        if (RegOpenKeyExW(HKEY_CLASSES_ROOT, key, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            if (RegQueryValueExW(hKey, NULL, 0, NULL, (BYTE*)buffer, &size) == ERROR_SUCCESS) {
+                if (wcsstr(buffer, L"malware") != nullptr || wcsstr(buffer, L"virus") != nullptr) {
+                    RegCloseKey(hKey);
+                    return false;
+                }
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckBootManager() {
+    HKEY hKey;
+    wchar_t buffer[256];
+    DWORD size = sizeof(buffer);
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\BootOptions", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        if (RegQueryValueExW(hKey, L"BootMgr", 0, NULL, (BYTE*)buffer, &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return wcscmp(buffer, L"\\bootmgr") == 0;
+        }
+        RegCloseKey(hKey);
+    }
+    return true;
+}
+
+bool CheckScancodeMap() {
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        DWORD type, size = 0;
+        bool hasScancodeMap = (RegQueryValueExW(hKey, L"Scancode Map", 0, &type, NULL, &size) == ERROR_SUCCESS);
+        RegCloseKey(hKey);
+
+        return !hasScancodeMap;
+    }
+    return true;
+}
+
+bool CheckCriticalServices() {
+    const wchar_t* services[] = {
+        L"WinDefend", L"SecurityHealthService", L"BITS", L"wuauserv", L"VSS"
+    };
+
+    for (const auto& service : services) {
+        wchar_t cmd[512];
+        swprintf(cmd, 512, L"sc query %s | findstr /C:\"RUNNING\"", service);
+
+        FILE* pipe = _wpopen(cmd, L"r");
+        if (pipe) {
+            char buffer[128];
+            bool isRunning = (fgets(buffer, 128, pipe) != nullptr);
+            _pclose(pipe);
+
+            if (!isRunning) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool CheckFirewall() {
+    HKEY hKey;
+    DWORD value = 1;
+    DWORD size = sizeof(DWORD);
+
+    const wchar_t* fwProfiles[] = {
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
+        L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\DomainProfile"
+    };
+
+    for (const auto& profile : fwProfiles) {
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, profile, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            if (RegQueryValueExW(hKey, L"EnableFirewall", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 0) {
+                RegCloseKey(hKey);
+                return false;
+            }
+            RegCloseKey(hKey);
+        }
+    }
+    return true;
+}
+
+bool CheckWinlogon() {
+    HKEY hKey;
+    wchar_t buffer[512];
+    DWORD size = sizeof(buffer);
+
+    bool winlogonOK = true;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        if (RegQueryValueExW(hKey, L"Shell", 0, NULL, (BYTE*)buffer, &size) == ERROR_SUCCESS) {
+            if (wcsstr(buffer, L"explorer.exe") == nullptr) {
+                winlogonOK = false;
+            }
+        }
+
+        size = sizeof(buffer);
+        if (RegQueryValueExW(hKey, L"Userinit", 0, NULL, (BYTE*)buffer, &size) == ERROR_SUCCESS) {
+            if (wcsstr(buffer, L"userinit.exe") == nullptr) {
+                winlogonOK = false;
+            }
+        }
+
+        RegCloseKey(hKey);
+    }
+
+    return winlogonOK;
+}
+
+bool CheckGroupPolicy() {
+    HKEY hKey;
+    DWORD value = 0;
+    DWORD size = sizeof(DWORD);
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+
+        if (RegQueryValueExW(hKey, L"DisableGPO", 0, NULL, (BYTE*)&value, &size) == ERROR_SUCCESS && value == 1) {
+            RegCloseKey(hKey);
+            return false;
+        }
+        RegCloseKey(hKey);
+    }
+    return true;
+}
+
+// -------------------- Diagnostic Runner --------------------
+void RunDiagnostics() {
+    DiagnosticCheck checks[] = {
+        {L"Windows Defender", L"Anti-malware protection status", CheckDefenderStatus, IDC_CHECK_DEFENDER, false},
+        {L"Task Manager", L"Task Manager accessibility", CheckTaskManager, IDC_CHECK_SYSTEMTOOLS, false},
+        {L"Command Prompt", L"CMD.exe accessibility", CheckCMDAccess, IDC_CHECK_SYSTEMTOOLS, false},
+        {L"Registry Tools", L"Registry Editor accessibility", CheckRegistryTools, IDC_CHECK_SYSTEMTOOLS, false},
+        {L"PowerShell", L"PowerShell accessibility", CheckPowershell, IDC_CHECK_SYSTEMTOOLS, false},
+        {L"UAC Settings", L"User Account Control configuration", CheckUACSettings, IDC_RESTORE_UAC_PROMPT, false},
+        {L"Safe Boot", L"Windows Safe Boot configuration", CheckSafeBoot, IDC_CHECK_BOOT, false},
+        {L"IFEO Protection", L"Image File Execution Options integrity", CheckIFEO, IDC_CHECK_IFEO, false},
+        {L"File Associations", L"Executable file associations", CheckFileAssociations, IDC_CHECK_FILEASSOC, false},
+        {L"Boot Manager", L"Windows Boot Manager path", CheckBootManager, IDC_RESTORE_BOOT_MGR, false},
+        {L"Keyboard Mapping", L"Keyboard scancode mapping", CheckScancodeMap, IDC_DELETE_SCANCODE, false},
+        {L"Critical Services", L"Essential Windows services", CheckCriticalServices, IDC_REPAIR_SERVICES, false},
+        {L"Windows Firewall", L"Firewall protection status", CheckFirewall, IDC_CHECK_SAFEDEFAULTS, false},
+        {L"Winlogon", L"Windows logon process integrity", CheckWinlogon, IDC_CHECK_SAFEDEFAULTS, false},
+        {L"Group Policy", L"Group Policy functionality", CheckGroupPolicy, IDC_CHECK_GROUPPOLICY, false}
+    };
+
+    g_DiagnosticFindings.clear();
+    std::wstring results = L"🔍 SYSTEM DIAGNOSTIC RESULTS\r\n";
+    results += L"================================\r\n\r\n";
+
+    int totalChecks = sizeof(checks) / sizeof(checks[0]);
+    int corruptedCount = 0;
+
+    SetWindowText(g_hStatus, L"Running system diagnostics...");
+    SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, totalChecks));
+    SendMessage(g_hProgress, PBM_SETPOS, 0, 0);
+
+    for (int i = 0; i < totalChecks; i++) {
+        auto& check = checks[i];
+
+        wchar_t progress[256];
+        swprintf(progress, 256, L"Checking: %s", check.name);
+        SetWindowText(g_hStatus, progress);
+        SendMessage(g_hProgress, PBM_SETPOS, i, 0);
+
+        check.isCorrupted = !check.checkFunction();
+
+        if (check.isCorrupted) {
+            results += L"❌ CORRUPTED: ";
+            g_DiagnosticFindings.push_back(check.name);
+            corruptedCount++;
+        }
+        else {
+            results += L"✅ OK: ";
+        }
+
+        results += std::wstring(check.name) + L" - " + check.description + L"\r\n";
+
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        Sleep(100);
+    }
+
+    results += L"\r\n================================\r\n";
+    results += L"SUMMARY: Found " + std::to_wstring(corruptedCount) + L" corrupted components out of " + std::to_wstring(totalChecks) + L" checks.\r\n\r\n";
+
+    if (corruptedCount > 0) {
+        results += L"Corrupted components have been automatically selected for repair.\r\n";
+        results += L"Review the selections and click 'Run Recovery Plan' to fix them.";
+    }
+    else {
+        results += L"🎉 Your system appears to be clean! No repairs needed.";
+    }
+
+    SetWindowText(g_hDiagnosticResults, results.c_str());
+    AutoCheckRepairOptions();
+
+    SetWindowText(g_hStatus, L"Diagnostics completed");
+    SendMessage(g_hProgress, PBM_SETPOS, totalChecks, 0);
+    g_DiagnosticsRun = true;
+    EnableWindow(g_hButtonSaveReport, corruptedCount > 0);
+}
+
+// -------------------- Auto-Check Repair Options --------------------
+void AutoCheckRepairOptions() {
+    ToggleAllCheckboxes(false);
+
+    std::vector<std::pair<std::wstring, HWND>> repairMapping = {
+        {L"Windows Defender", g_hCheckDefender},
+        {L"Task Manager", g_hCheckSystemTools},
+        {L"Command Prompt", g_hCheckSystemTools},
+        {L"Registry Tools", g_hCheckSystemTools},
+        {L"PowerShell", g_hCheckSystemTools},
+        {L"UAC Settings", g_hRestoreUACPrompt},
+        {L"Safe Boot", g_hCheckBoot},
+        {L"IFEO Protection", g_hCheckIFEO},
+        {L"File Associations", g_hCheckFileAssoc},
+        {L"Boot Manager", g_hRestoreBootMgr},
+        {L"Keyboard Mapping", g_hDeleteScanCodeMaps},
+        {L"Critical Services", g_hRepairCriticalServices},
+        {L"Windows Firewall", g_hCheckSafeDefaults},
+        {L"Winlogon", g_hCheckSafeDefaults},
+        {L"Group Policy", g_hCheckGroupPolicy}
+    };
+
+    for (const auto& finding : g_DiagnosticFindings) {
+        for (const auto& mapping : repairMapping) {
+            if (finding == mapping.first) {
+                SendMessage(mapping.second, BM_SETCHECK, BST_CHECKED, 0);
+                break;
+            }
+        }
+    }
+}
+
+// -------------------- Save Diagnostic Report --------------------
+void SaveDiagnosticReport() {
+    wchar_t reportPath[MAX_PATH];
+    wchar_t timebuf[64];
+    SYSTEMTIME st;
+
+    GetLocalTime(&st);
+    swprintf(timebuf, _countof(timebuf), L"%04d%02d%02d_%02d%02d%02d",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    // Fixed: Removed the extra NULL parameter
+    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_DESKTOP, NULL, 0, reportPath))) {
+        wcscat(reportPath, L"\\SystemDiagnostic_");
+        wcscat(reportPath, timebuf);
+        wcscat(reportPath, L".txt");
+
+        int textLength = GetWindowTextLength(g_hDiagnosticResults);
+        std::wstring reportText;
+        reportText.resize(textLength + 1);
+        GetWindowText(g_hDiagnosticResults, &reportText[0], textLength + 1);
+
+        std::wstring fullReport = L"Registry Restorer - System Diagnostic Report\r\n";
+        fullReport += L"Generated: " + std::to_wstring(st.wYear) + L"-" + std::to_wstring(st.wMonth) + L"-" + std::to_wstring(st.wDay) + L" " +
+            std::to_wstring(st.wHour) + L":" + std::to_wstring(st.wMinute) + L":" + std::to_wstring(st.wSecond) + L"\r\n\r\n";
+        fullReport += reportText;
+
+        HANDLE hFile = CreateFileW(reportPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            DWORD bytesWritten;
+            WriteFile(hFile, fullReport.c_str(), (DWORD)fullReport.size() * sizeof(wchar_t), &bytesWritten, NULL);
+            CloseHandle(hFile);
+
+            MessageBoxW(NULL, L"Diagnostic report saved to Desktop", L"Report Saved", MB_ICONINFORMATION);
+        }
+        else {
+            MessageBoxW(NULL, L"Failed to save diagnostic report", L"Error", MB_ICONERROR);
+        }
+    }
+    else {
+        MessageBoxW(NULL, L"Failed to get Desktop path", L"Error", MB_ICONERROR);
+    }
+}
+
 // -------------------- Utility Functions --------------------
 static void RestoreUACPrompt() {
     UpdateProgress(L"Restoring UAC Elevation Prompts");
-    // Standard UAC settings for security
-    DWORD enableLUA = 1;           // Enable User Account Control
-    DWORD consentAdmin = 5;        // Prompt for consent for non-Windows binaries (most secure)
-    DWORD consentUser = 3;         // Prompt for credentials for standard users
-    DWORD secureDesktop = 1;       // Enable secure desktop
-    DWORD notifyElevation = 1;     // Notify elevation requests
-    DWORD virtualizeFiles = 1;     // Enable file and registry virtualization
+    DWORD enableLUA = 1;
+    DWORD consentAdmin = 5;
+    DWORD consentUser = 3;
+    DWORD secureDesktop = 1;
+    DWORD notifyElevation = 1;
+    DWORD virtualizeFiles = 1;
 
     const wchar_t* subKey = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
 
@@ -160,17 +685,12 @@ static void RestoreUACPrompt() {
     }
 }
 
-
-
-
 static void RestoreBootMgrPath() {
     UpdateProgress(L"Restoring Boot Manager Path");
 
-
     HKEY hKey = nullptr;
-    const wchar_t* correctBootMgrPath = L"\\bootmgr"; // The standard, correct path
+    const wchar_t* correctBootMgrPath = L"\\bootmgr";
 
-    // The key targeted by the malware
     LONG lResult = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
         L"SYSTEM\\CurrentControlSet\\Control\\BootOptions",
         0,
@@ -178,15 +698,14 @@ static void RestoreBootMgrPath() {
         &hKey);
 
     if (lResult == ERROR_SUCCESS) {
-        // Set the correct value
         lResult = RegSetValueExW(hKey,
-            L"BootMgr", // The value name the malware corrupted
+            L"BootMgr",
             0,
             REG_SZ,
             (const BYTE*)correctBootMgrPath,
             (wcslen(correctBootMgrPath) + 1) * sizeof(wchar_t));
 
-    if (lResult == ERROR_SUCCESS) {
+        if (lResult == ERROR_SUCCESS) {
             LogMessage(L"SUCCESS: Restored BootMgr path to: %s", correctBootMgrPath);
         }
         RegCloseKey(hKey);
@@ -194,9 +713,7 @@ static void RestoreBootMgrPath() {
     else {
         LogMessage(L"FAILURE: Could not open BootOptions key to restore BootMgr. Error: 0x%08X", lResult);
     }
-    // Note: We don't stop on failure. We log it and continue the recovery plan.
 }
-
 
 int SafeSystem(const wchar_t* cmd) {
     if (!cmd) return -1;
@@ -224,8 +741,6 @@ bool WriteRegString(HKEY root, LPCWSTR subKey, LPCWSTR name, LPCWSTR value) {
     RegCloseKey(hKey);
     return ok;
 }
-
-
 
 // -------------------- Windows Version Check --------------------
 static bool IsWindows10OrGreater() {
@@ -292,7 +807,7 @@ static void EnableDarkMode(HWND hWnd) {
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hSetCAD0,
         g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,g_hRestoreBootMgr,
         g_hButtonRun, g_hButtonRestart, g_hProgress, g_hButtonDarkMode,
-        g_hStatus, g_hPercentage
+        g_hStatus, g_hPercentage, g_hButtonDiagnostic, g_hButtonSaveReport
     };
 
     for (HWND ctrl : controls) {
@@ -318,7 +833,7 @@ static void DisableDarkMode(HWND hWnd) {
         g_hCheckGroupPolicy, g_hCheckRecovery, g_hCheckBoot, g_hButtonRun,
         g_hButtonRestart, g_hProgress, g_hButtonDarkMode, g_hSetCAD0,
         g_hDeleteScanCodeMaps, g_hRepairCriticalServices, g_hRestoreUACPrompt,g_hRestoreBootMgr,
-        g_hStatus, g_hPercentage
+        g_hStatus, g_hPercentage, g_hButtonDiagnostic, g_hButtonSaveReport
     };
 
     for (HWND ctrl : controls) {
@@ -366,14 +881,12 @@ static void UpdateProgress(const wchar_t* status) {
         SetWindowText(g_hPercentage, percentageText);
     }
 
-    // Process messages to keep UI responsive
     MSG msg;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    // Small delay to allow user to see progress
     Sleep(50);
 }
 
@@ -407,7 +920,6 @@ static void ReanimateDefenderAll() {
 
     HKEY hKey = nullptr;
 
-    // Reactivate HKLM Defender
     for (auto& path : pathsHKLM) {
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
             RegSetValueExW(hKey, L"DisableAntiSpyware", 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
@@ -417,30 +929,17 @@ static void ReanimateDefenderAll() {
         }
     }
 
-    // Reactivate HKCU Defender
-    for (auto& path : pathsHKLM) {
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-            RegSetValueExW(hKey, L"DisableAntiSpyware", 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
-            RegSetValueExW(hKey, L"DisableAntiVirus", 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
-            RegSetValueExW(hKey, L"PUAProtection", 0, REG_DWORD, (BYTE*)&pua, sizeof(pua));
-            RegCloseKey(hKey);
-        }
-    }
-
-    // Tamper + Real-Time Protection HKLM
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows Defender\\Features", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegSetValueExW(hKey, L"TamperProtection", 0, REG_DWORD, (BYTE*)&tamper, sizeof(tamper));
         RegCloseKey(hKey);
     }
 
-    // Real-time protection HKLM
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         const wchar_t* values[] = { L"DisableRealtimeMonitoring", L"DisableBehaviorMonitoring", L"DisableIOAVProtection", L"DisableOnAccessProtection" };
         for (auto& v : values) RegSetValueExW(hKey, v, 0, REG_DWORD, (BYTE*)&enable, sizeof(enable));
         RegCloseKey(hKey);
     }
 
-    // Spynet HKLM
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows Defender\\Spynet", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegSetValueExW(hKey, L"SpynetReporting", 0, REG_DWORD, (BYTE*)&spynet, sizeof(spynet));
         RegSetValueExW(hKey, L"SubmitSamplesConsent", 0, REG_DWORD, (BYTE*)&spynet, sizeof(spynet));
@@ -457,7 +956,6 @@ static void RestoreKeyboardAndCMDAndOthers() {
     DWORD val1 = 1;
     DWORD val2 = 2;
 
-    // Keyboard Scancode Map
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegDeleteValueW(hKey, L"Scancode Map");
         RegCloseKey(hKey);
@@ -471,7 +969,6 @@ static void RestoreKeyboardAndCMDAndOthers() {
         RegCloseKey(hKey);
     }
 
-    // CMD + Registry Tools + TaskMgr (HKLM + HKCU)
     const wchar_t* sysKeys[] = {
         L"SOFTWARE\\Policies\\Microsoft\\Windows\\System"
     };
@@ -491,7 +988,6 @@ static void RestoreKeyboardAndCMDAndOthers() {
         }
     }
 
-    // CMD file associations (HKCR)
     const wchar_t* cmdAssocKeys[] = {
         L"cmdfile\\shell\\open\\command",
         L"batfile\\shell\\open\\command",
@@ -641,7 +1137,6 @@ static void RestoreSafeDefaults() {
         RegCloseKey(hKey);
     }
 
-    // Restore Firewall
     DWORD enable = 1;
     const wchar_t* fwKeys[] = {
         L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
@@ -688,14 +1183,12 @@ static void ResetBrowserSettings() {
 
     HKEY hKey;
 
-    // Reset Chrome settings
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Google\\Chrome\\", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegDeleteValueW(hKey, L"RestoreOnStartup");
         RegDeleteValueW(hKey, L"Homepage");
         RegCloseKey(hKey);
     }
 
-    // Reset Edge settings
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Edge\\", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         RegDeleteValueW(hKey, L"RestoreOnStartup");
         RegDeleteValueW(hKey, L"Homepage");
@@ -721,32 +1214,31 @@ static void RepairFileAssociations() {
     SafeSystem(L"ftype cmdfile=\"%1\" %*");
 }
 
+// --------------------Aggressive Critical Services Repair --------------------
 static void RepairCriticalServices() {
     UpdateProgress(L"Repairing critical services");
 
     const wchar_t* criticalServices[] = {
-        L"WinDefend", L"BITS", L"wuauserv", L"VSS",
-        L"Schedule", L"EventLog", L"PlugPlay", L"RpcSs",
-        L"DcomLaunch", L"Winmgmt", L"CryptSvc", L"LanmanServer",
-        L"LanmanWorkstation", L"Netlogon", L"SamSs"
+        L"WinDefend", L"WdNisSvc", L"SecurityHealthService", L"TrustedInstaller",
+        L"Dhcp", L"Dnscache", L"LanmanServer", L"LanmanWorkstation",
+        L"Netlogon", L"PlugPlay", L"RpcSs", L"DcomLaunch", L"Tcpip",
+        L"wuauserv", L"BITS", L"Schedule", L"Winmgmt", L"CryptSvc", L"VSS",
+        L"EventLog", L"SamSs",
+        L"AudioSrv", L"Spooler", L"W32Time", L"WinHttpAutoProxySvc"
     };
 
     for (auto service : criticalServices) {
         wchar_t cmd[512];
 
-        // Set to auto-start
         swprintf(cmd, 512, L"sc config %s start= auto", service);
         SafeSystem(cmd);
 
-        // Set recovery actions
         swprintf(cmd, 512, L"sc failure %s reset= 30 actions= restart/5000", service);
         SafeSystem(cmd);
 
-        // Start the service
         swprintf(cmd, 512, L"sc start %s", service);
         SafeSystem(cmd);
 
-        // Brief pause to avoid overwhelming the system
         Sleep(100);
     }
 }
@@ -754,135 +1246,164 @@ static void RepairCriticalServices() {
 // -------------------- GUI Functions --------------------
 static void CreateGUI(HWND hWnd) {
     int yPos = 20;
-    int buttonWidth = 400; // Increased width to fit longer text
+    int windowWidth = 700;  // Increased from 450 to 700
+    int leftColumn = 20;
+    int rightColumn = 360;  // Second column starts here
+    int checkboxWidth = 300;
 
-    g_hCheckSelectAll = CreateWindowW(L"BUTTON", L"Select All",
+    // === DIAGNOSTIC SECTION ===
+    g_hButtonDiagnostic = CreateWindowW(L"BUTTON", L"🔍 Run System Diagnostics",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        leftColumn, yPos, 250, 35, hWnd, (HMENU)IDC_BUTTON_DIAGNOSTIC, NULL, NULL);
+    yPos += 45;
+
+    g_hDiagnosticResults = CreateWindowW(L"EDIT",
+        L"Click 'Run System Diagnostics' to scan your system for malware damage.\n\n"
+        L"This will check:\n"
+        L"• Windows Defender status\n"
+        L"• System tools accessibility\n"
+        L"• UAC configuration\n"
+        L"• Boot settings\n"
+        L"• And more...",
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+        leftColumn, yPos, windowWidth - 40, 150, hWnd, (HMENU)IDC_DIAGNOSTIC_RESULTS, NULL, NULL);
+    yPos += 160;
+
+    g_hButtonSaveReport = CreateWindowW(L"BUTTON", L"💾 Save Diagnostic Report",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        leftColumn, yPos, 200, 30, hWnd, (HMENU)IDC_BUTTON_SAVE_REPORT, NULL, NULL);
+    EnableWindow(g_hButtonSaveReport, FALSE);
+    yPos += 40;
+
+    // === REPAIR OPTIONS SECTION - TWO COLUMNS ===
+    CreateWindowW(L"STATIC", L"REPAIR OPTIONS:",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+        leftColumn, yPos, 200, 20, hWnd, NULL, NULL, NULL);
+    yPos += 25;
+
+    // LEFT COLUMN
+    g_hCheckSelectAll = CreateWindowW(L"BUTTON", L"Select All Repairs",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, 100, 20, hWnd, (HMENU)IDC_CHECK_SELECTALL, NULL, NULL);
+        leftColumn, yPos, 150, 20, hWnd, (HMENU)IDC_CHECK_SELECTALL, NULL, NULL);
     yPos += 30;
 
     g_hCheckDefender = CreateWindowW(L"BUTTON", L"Reactivate Windows Defender",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_DEFENDER, NULL, NULL);
     yPos += 30;
 
     g_hCheckSystemTools = CreateWindowW(L"BUTTON", L"Restore System Tools (CMD, Registry, Task Manager)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_SYSTEMTOOLS, NULL, NULL);
     yPos += 30;
 
     g_hCheckPersistence = CreateWindowW(L"BUTTON", L"Remove Malware Persistence",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_PERSISTENCE, NULL, NULL);
     yPos += 30;
 
     g_hCheckSafeDefaults = CreateWindowW(L"BUTTON", L"Restore Safe Defaults (Winlogon, Firewall)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_SAFEDEFAULTS, NULL, NULL);
     yPos += 30;
 
     g_hCheckIFEO = CreateWindowW(L"BUTTON", L"Restore Image File Execution Options",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_IFEO, NULL, NULL);
     yPos += 30;
 
     g_hCheckBrowser = CreateWindowW(L"BUTTON", L"Reset Browser Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_BROWSER, NULL, NULL);
     yPos += 30;
 
     g_hCheckFileAssoc = CreateWindowW(L"BUTTON", L"Repair File Associations",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
-    yPos += 30;
+        leftColumn, yPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_FILEASSOC, NULL, NULL);
+
+    // RIGHT COLUMN - Start at same Y position as first checkbox
+    int rightYPos = 20 + 45 + 160 + 40 + 25 + 30; // Starting Y for right column
 
     g_hCheckGroupPolicy = CreateWindowW(L"BUTTON", L"Update Group Policy",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_GROUPPOLICY, NULL, NULL);
+    rightYPos += 30;
 
     g_hCheckRecovery = CreateWindowW(L"BUTTON", L"Enable Windows Recovery Environment",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_RECOVERY, NULL, NULL);
+    rightYPos += 30;
 
     g_hCheckBoot = CreateWindowW(L"BUTTON", L"Restore Boot Settings",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_CHECK_BOOT, NULL, NULL);
+    rightYPos += 30;
 
     g_hSetCAD0 = CreateWindowW(L"BUTTON", L"Set CAD to 0",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_SET_CAD_0, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_SET_CAD_0, NULL, NULL);
+    rightYPos += 30;
 
     g_hDeleteScanCodeMaps = CreateWindowW(L"BUTTON", L"Delete Scan Code Maps",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_DELETE_SCANCODE, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_DELETE_SCANCODE, NULL, NULL);
+    rightYPos += 30;
 
     g_hRepairCriticalServices = CreateWindowW(L"BUTTON", L"Repair Critical Services",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_REPAIR_SERVICES, NULL, NULL);
+    rightYPos += 30;
 
     g_hRestoreUACPrompt = CreateWindowW(L"BUTTON", L"Repair UAC",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_RESTORE_UAC_PROMPT, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_RESTORE_UAC_PROMPT, NULL, NULL);
+    rightYPos += 30;
 
     g_hRestoreBootMgr = CreateWindowW(L"BUTTON", L"Redefine BootMgr Via Registry",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_RESTORE_BOOT_MGR, NULL, NULL);
-    yPos += 30;
+        rightColumn, rightYPos, checkboxWidth, 20, hWnd, (HMENU)IDC_RESTORE_BOOT_MGR, NULL, NULL);
+    rightYPos += 30;
 
-    // Buttons at the bottom
+    // Find the maximum Y position from both columns to position buttons below
+    int maxYPos = max(yPos, rightYPos) + 10;
+
+    // Buttons at the bottom - centered
+    int buttonAreaWidth = windowWidth - 40;
+    int buttonWidth = 150;
+    int buttonSpacing = 10;
+
     g_hButtonDarkMode = CreateWindowW(L"BUTTON", L"🌙 Dark Mode",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        20, yPos, 100, 30, hWnd, (HMENU)IDC_BUTTON_DARKMODE, NULL, NULL);
+        leftColumn, maxYPos, buttonWidth, 30, hWnd, (HMENU)IDC_BUTTON_DARKMODE, NULL, NULL);
 
     g_hButtonRun = CreateWindowW(L"BUTTON", L"Run Recovery Plan",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        130, yPos, 150, 30, hWnd, (HMENU)IDC_BUTTON_RUN, NULL, NULL);
+        leftColumn + buttonWidth + buttonSpacing, maxYPos, buttonWidth, 30, hWnd, (HMENU)IDC_BUTTON_RUN, NULL, NULL);
 
     g_hButtonRestart = CreateWindowW(L"BUTTON", L"Restart System",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        290, yPos, 150, 30, hWnd, (HMENU)IDC_BUTTON_RESTART, NULL, NULL);
-    yPos += 40;
+        leftColumn + (buttonWidth + buttonSpacing) * 2, maxYPos, buttonWidth, 30, hWnd, (HMENU)IDC_BUTTON_RESTART, NULL, NULL);
 
-    // Progress bar and status - make progress bar wider too
+    maxYPos += 40;
+
+    // Progress bar and status - full width
     g_hProgress = CreateWindowW(PROGRESS_CLASS, NULL,
         WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
-    yPos += 30;
+        leftColumn, maxYPos, windowWidth - 40, 20, hWnd, (HMENU)IDC_PROGRESS, NULL, NULL);
+    maxYPos += 30;
 
-    g_hStatus = CreateWindowW(L"STATIC", L"Select options and click 'Run Recovery Plan'",
+    g_hStatus = CreateWindowW(L"STATIC", L"Click 'Run System Diagnostics' to begin",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
-    yPos += 30;
+        leftColumn, maxYPos, windowWidth - 40, 20, hWnd, (HMENU)IDC_STATUS, NULL, NULL);
+    maxYPos += 30;
 
-    g_hPercentage = CreateWindowW(L"STATIC", L"0% Complete",
+    g_hPercentage = CreateWindowW(L"STATIC", L"Ready",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        20, yPos, buttonWidth, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
+        leftColumn, maxYPos, windowWidth - 40, 20, hWnd, (HMENU)IDC_PERCENTAGE, NULL, NULL);
 
-    // Set default check states
-    SendMessage(g_hCheckDefender, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessage(g_hCheckSystemTools, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessage(g_hCheckPersistence, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessage(g_hCheckSafeDefaults, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessage(g_hCheckIFEO, BM_SETCHECK, BST_CHECKED, 0);
-    SendMessage(g_hCheckBrowser, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hCheckFileAssoc, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hCheckGroupPolicy, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hCheckRecovery, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hCheckBoot, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hSetCAD0, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hDeleteScanCodeMaps, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hRepairCriticalServices, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hRestoreUACPrompt, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessage(g_hRestoreBootMgr, BM_SETCHECK, BST_UNCHECKED, 0);
+    // Set default check states (all unchecked initially)
+    ToggleAllCheckboxes(false);
 
-    // Enable dark mode by default if supported
     if (IsWindows10OrGreater()) {
         g_DarkMode = true;
         EnableDarkMode(hWnd);
@@ -893,7 +1414,6 @@ static void RunRecoveryPlan() {
     g_TotalSteps = 0;
     g_CurrentStep = 0;
 
-    // Count actual steps based on checked boxes
     if (SendMessage(g_hCheckDefender, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hCheckSystemTools, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
     if (SendMessage(g_hCheckPersistence, BM_GETCHECK, 0, 0) == BST_CHECKED) g_TotalSteps++;
@@ -913,12 +1433,10 @@ static void RunRecoveryPlan() {
     SendMessage(g_hProgress, PBM_SETRANGE, 0, MAKELPARAM(0, g_TotalSteps));
     SendMessage(g_hProgress, PBM_SETSTEP, 1, 0);
 
-    // Disable buttons during operation
     EnableWindow(g_hButtonRun, FALSE);
     EnableWindow(g_hButtonRestart, FALSE);
     EnableWindow(g_hButtonDarkMode, FALSE);
 
-    // Now run the correct checks:
     if (SendMessage(g_hCheckDefender, BM_GETCHECK, 0, 0) == BST_CHECKED)
         ReanimateDefenderAll();
 
@@ -964,7 +1482,6 @@ static void RunRecoveryPlan() {
     if (SendMessage(g_hRestoreBootMgr, BM_GETCHECK, 0, 0) == BST_CHECKED)
         RestoreBootMgrPath();
 
-    // Re-enable buttons
     EnableWindow(g_hButtonRun, TRUE);
     EnableWindow(g_hButtonRestart, TRUE);
     EnableWindow(g_hButtonDarkMode, TRUE);
@@ -977,25 +1494,48 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
     switch (uMsg) {
     case WM_CREATE:
         CreateGUI(hWnd);
-        break;
+        return 0;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_BUTTON_DIAGNOSTIC:
+            std::thread([]() {
+                RunDiagnostics();
+                }).detach();
+            return 0;
+
+        case IDC_BUTTON_SAVE_REPORT:
+            SaveDiagnosticReport();
+            return 0;
+
         case IDC_CHECK_SELECTALL:
         {
             bool state = SendMessage(g_hCheckSelectAll, BM_GETCHECK, 0, 0) == BST_CHECKED;
             ToggleAllCheckboxes(state);
+            return 0;
         }
-        break;
 
         case IDC_BUTTON_RUN:
-            // Run in a separate thread to keep UI responsive
+            if (!g_DiagnosticsRun) {
+                int result = MessageBoxW(hWnd,
+                    L"You haven't run diagnostics yet. It's recommended to scan your system first.\n\n"
+                    L"Run diagnostics now?",
+                    L"Run Diagnostics First",
+                    MB_YESNO | MB_ICONQUESTION);
+
+                if (result == IDYES) {
+                    std::thread([]() {
+                        RunDiagnostics();
+                        }).detach();
+                    break;
+                }
+            }
             std::thread(RunRecoveryPlan).detach();
-            break;
+            return 0;
 
         case IDC_BUTTON_RESTART:
             RestartSystem();
-            break;
+            return 0;
 
         case IDC_BUTTON_DARKMODE:
             g_DarkMode = !g_DarkMode;
@@ -1005,7 +1545,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             else {
                 DisableDarkMode(hWnd);
             }
-            break;
+            return 0;
         }
         break;
 
@@ -1034,63 +1574,167 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         break;
 
     case WM_DESTROY:
+        // FIXED: Safe cleanup without SEH
         if (g_hDarkBrush) {
             DeleteObject(g_hDarkBrush);
+            g_hDarkBrush = NULL;
         }
+
         if (g_hBackgroundBrush) {
             DeleteObject(g_hBackgroundBrush);
+            g_hBackgroundBrush = NULL;
         }
-        PostQuitMessage(0);
-        break;
 
-    default:
-        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+        if (g_hLogFile != INVALID_HANDLE_VALUE) {
+            LogMessage(L"==== RegRestorer exiting ====");
+            CloseHandle(g_hLogFile);
+            g_hLogFile = INVALID_HANDLE_VALUE;
+        }
+
+        // Clear any C++ containers
+        g_DiagnosticFindings.clear();
+
+        PostQuitMessage(0);
+        return 0;
+
+    case WM_ERASEBKGND:
+        if (g_DarkMode) {
+            HDC hdc = (HDC)wParam;
+            RECT rect;
+            GetClientRect(hWnd, &rect);
+            FillRect(hdc, &rect, g_hDarkBrush);
+            return 1;
+        }
+        break;
     }
-    return 0;
+
+    // FIXED: Always return a value for unhandled messages
+    return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-// -------------------- Main --------------------
+
 INT WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-    if (!IsElevated()) {
-        MessageBoxW(NULL, L"This program must be run as Administrator.", L"Error", MB_ICONERROR);
+    // Initialize common controls FIRST - this is critical
+    INITCOMMONCONTROLSEX icex;
+    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icex.dwICC = ICC_PROGRESS_CLASS | ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES;
+
+    if (!InitCommonControlsEx(&icex)) {
+        // If InitCommonControlsEx fails, try the basic version
+        InitCommonControls();
+    }
+
+    // Check if already running
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"RegistryRestorerMutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        MessageBoxW(NULL, L"Registry Restorer is already running!", L"Error", MB_ICONERROR);
         return 1;
     }
 
-    // Register window class
+    if (!IsElevated()) {
+        MessageBoxW(NULL, L"This program must be run as Administrator.", L"Error", MB_ICONERROR);
+        if (hMutex) {
+            ReleaseMutex(hMutex);
+            CloseHandle(hMutex);
+        }
+        return 1;
+    }
+
+    // Initialize logging
+    wchar_t logPath[MAX_PATH];
+    wchar_t timebuf[64];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    swprintf_s(timebuf, _countof(timebuf), L"%04d%02d%02d_%02d%02d%02d",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    // Use temp directory instead of ProgramData to avoid permission issues
+    GetTempPathW(MAX_PATH, logPath);
+    wcscat_s(logPath, _countof(logPath), L"RegRestorer\\");
+    CreateDirectoryW(logPath, NULL);
+    wcscat_s(logPath, _countof(logPath), L"RegRestorer_");
+    wcscat_s(logPath, _countof(logPath), timebuf);
+    wcscat_s(logPath, _countof(logPath), L".log");
+
+    g_hLogFile = CreateFileW(logPath, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (g_hLogFile != INVALID_HANDLE_VALUE) {
+        const WORD bom = 0xFEFF;
+        DWORD bw;
+        WriteFile(g_hLogFile, &bom, sizeof(bom), &bw, NULL);
+        LogMessage(L"==== RegRestorer started ====");
+    }
+
     const wchar_t CLASS_NAME[] = L"RegistryRestorerClass";
 
     WNDCLASS wc = {};
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = CLASS_NAME;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszMenuName = NULL;
+    wc.cbClsExtra = 0;
+    wc.cbWndExtra = 0;
+    wc.style = CS_HREDRAW | CS_VREDRAW;
 
-    RegisterClass(&wc);
+    if (!RegisterClass(&wc)) {
+        DWORD error = GetLastError();
+        wchar_t errorMsg[256];
+        swprintf_s(errorMsg, _countof(errorMsg), L"Window registration failed! Error code: %lu", error);
+        MessageBoxW(NULL, errorMsg, L"Error", MB_ICONERROR);
+        if (hMutex) {
+            ReleaseMutex(hMutex);
+            CloseHandle(hMutex);
+        }
+        return 1;
+    }
 
-    // Initialize common controls for progress bar
-    INITCOMMONCONTROLSEX icex;
-    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    icex.dwICC = ICC_PROGRESS_CLASS;
-    InitCommonControlsEx(&icex);
+    // Calculate window position to center it
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+    int windowWidth = 750;
+    int windowHeight = 650;
+    int x = (screenWidth - windowWidth) / 2;
+    int y = (screenHeight - windowHeight) / 2;
 
-    // Create window
     HWND hWnd = CreateWindowEx(
-        0, CLASS_NAME, L"Registry Restorer",
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 450, 650,
+        0,
+        CLASS_NAME,
+        L"Registry Restorer",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        x, y, windowWidth, windowHeight,
         NULL, NULL, hInstance, NULL
     );
 
-    if (hWnd == NULL) return 0;
+    if (hWnd == NULL) {
+        DWORD error = GetLastError();
+        wchar_t errorMsg[256];
+        swprintf_s(errorMsg, _countof(errorMsg), L"Window creation failed! Error code: %lu", error);
+        MessageBoxW(NULL, errorMsg, L"Error", MB_ICONERROR);
+        if (hMutex) {
+            ReleaseMutex(hMutex);
+            CloseHandle(hMutex);
+        }
+        return 1;
+    }
 
     ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
 
-    // Message loop
     MSG msg = {};
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    return 0;
+    // Cleanup
+    if (hMutex) {
+        ReleaseMutex(hMutex);
+        CloseHandle(hMutex);
+    }
+
+    return (int)msg.wParam;
 }
