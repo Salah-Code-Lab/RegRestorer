@@ -1,108 +1,231 @@
-# RegRestorer - Windows Registry Restoration Tool
+## RegRestorer - Windows Registry Restoration & System Recovery Tool
 
+# 🚨 Critical Disclaimer & Warning
 
-# 🚨 Disclaimer & Warning
+# RegRestorer is a highly invasive system utility designed for extreme recovery scenarios. It performs deep modifications to the Windows Registry and system configurations to revert settings to Microsoft defaults and remove persistent malware
+# artifacts.
 
-RegRestorer is a highly invasive system utility designed for extreme recovery scenarios. It performs deep modifications to the Windows Registry to revert settings to Microsoft defaults and remove persistent malware artifacts.
+⚠️ EXTREME RISK WARNING:
 
-USE AT YOUR OWN EXTREME RISK. Improper use can render your system unstable or completely unusable.
+    USE AT YOUR OWN RISK - Improper use can render your system unstable or completely unusable
 
-This tool is NOT intended for casual users. It is designed for advanced users, system administrators, and security professionals.
+    NOT FOR CASUAL USERS - Designed for advanced users, system administrators, and security professionals
 
-Will Trigger Antivirus Detections: Its actions mimic advanced malware. These are false positives but are expected. Review the source code to confirm transparency.
+    EXPECT ANTIVIRUS DETECTIONS - Its actions mimic advanced malware (these are false positives but expected)
 
-Always Have Backups: Ensure you have backups of important data and a system restore point before proceeding.
+    ALWAYS HAVE BACKUPS - Ensure you have system backups and restore points before proceeding
+
+    REVIEW SOURCE CODE - Full transparency through available source code review
 
 # 📖 Overview
 
-RegRestorer is a C++ application acting as a “nuclear option” for repairing Windows systems compromised by malware, ransomware, or hijackers. It focuses exclusively on undoing malicious registry modifications commonly used for persistence, disabling security, or maintaining control over a machine.
+RegRestorer is a comprehensive C++ Windows recovery application serving as a "nuclear option" for repairing systems compromised by malware, ransomware, or hijackers. It systematically undoes malicious registry modifications and system changes commonly used for persistence, disabling security tools, or maintaining unauthorized control.
+🎯 New Diagnostic System (v2.0 Update)
+🔍 Automated System Assessment
 
-# ⚡ Core Capabilities
-Persistence Removal (The "Nuke")
+    Comprehensive Health Scan: 15-point diagnostic check of critical system components
 
-Image File Execution Options (IFEO): Removes debugger hijacks for explorer.exe, svchost.exe, winlogon.exe, and lsass.exe.
+    Smart Repair Selection: Automatically selects necessary repairs based on diagnostic findings
 
-Winlogon Notify: Cleans malicious DLLs loaded via Notification Packages.
+    Detailed Reporting: Generates comprehensive diagnostic reports with corruption details
 
-File Association Hijacking: Restores default commands for .exe, .txt, .cmd, .bat, and .lnk.
+# Diagnostic Checks Include:
 
-Security Policy & Service Restoration
+    Windows Defender & Security Services Status
 
-Re-enables Task Manager, Registry Editor, Command Prompt, and PowerShell by removing DisableTaskMgr, DisableRegistryTools, DisableCMD, and DisablePowerShell.
+    System Tools Accessibility (Task Manager, CMD, Registry Editor, PowerShell)
 
-Restores User Account Control (UAC) to default behavior.
+    UAC Configuration Integrity
 
-Windows Defender Reanimation
+    Safe Boot & Boot Manager Settings
 
-Turns ON Tamper Protection, Real-Time Protection, PUA Protection, and cloud-based Spynet reporting.
+    Image File Execution Options (IFEO) Integrity
 
-Turns OFF DisableAntiSpyware and DisableAntiVirus switches.
+    File Association Validation
 
-Applies these changes to both HKEY_LOCAL_MACHINE and HKEY_CURRENT_USER.
+    Keyboard Mapping & Scancode Analysis
 
-System Component Repair
+    Critical Service Health Monitoring
 
-Restores Windows Time Service to use the legitimate w32time.dll.
+    Firewall & Group Policy Functionality
 
-Resets SSDPSRV service to correct DLL path.
+    Winlogon Process Integrity
 
-Purges malicious Netsh helper registrations.
+# ⚡ Enhanced Core Capabilities
 
-Resets keyboard layouts by removing malicious Scancode Map configurations.
+🛡️ Advanced Persistence Removal
 
-Restores Safe Mode settings to default.
+    Image File Execution Options (IFEO): Removes debugger hijacks for critical processes:
 
-Re-enables Windows Recovery Environment (WinRE) via reagentc /enable.
+        explorer.exe, svchost.exe, winlogon.exe, taskmgr.exe
 
-Ensures critical services (Windows Update, Security Center, BITS, Defender) start automatically.
+        regedit.exe, cmd.exe, powershell.exe, msconfig.exe
 
-System Stability & UI Restoration
+    Winlogon Restoration: Resets Shell, Userinit, and Notification Packages
 
-Restores default logon background and mouse configuration.
+    Run Key Purge: Scans and removes malicious auto-start entries across all user hives
 
-Resets browser group policies for Edge, Chrome, and Firefox.
+    Service Hijack Repair: Restores legitimate service DLL paths and configurations
 
-Resets Windows Boot Manager (BootStatusPolicy) and BCD DebugEnabled to normal values.
+# 🔒 Security Policy & Tool Restoration
 
-Re-enables System File Checker (SFC) by setting SFCDisabled to 0.
+    System Tools Re-enablement:
 
-# 🛡️ Legitimacy & Transparency Features
+        Task Manager (DisableTaskMgr)
 
-No Network Activity: All operations are local; no internet connection is required.
+        Registry Editor (DisableRegistryTools)
 
-Source Availability: Full C++ source code available for review.
+        Command Prompt (DisableCMD)
 
-User Consent: Requires administrator privileges and explicit confirmation.
+        PowerShell (DisablePowershell)
 
-# 🚀 Usage
+    UAC Restoration: Returns User Account Control to default secure settings
 
-Back up all important data.
+    Group Policy Reset: Applies gpupdate /force and resets policy overrides
 
-Right-click RegRestorer.exe → Run as administrator.
+# 🛡️ Windows Defender Reanimation
 
-Select the functions you need to repair.
+    Protection Reactivation:
 
-The tool executes, showing progress dialogs.
+        Tamper Protection & Real-Time Monitoring
 
-Restart the system to ensure all changes take effect.
+        Behavior Monitoring & IOAV Protection
 
-# 🔧 Intended Use Cases
+        PUA Protection & Cloud Reporting
 
-Remediating systems with persistent malware surviving normal scans.
+    Malicious Disabling Reversal:
 
-Reverting system policies locked by ransomware or hijackers.
+        DisableAntiSpyware & DisableAntiVirus removal
 
-Preparing a compromised system for forensic analysis.
+        SpyNet reporting restoration
 
-Advanced troubleshooting of deep system setting corruption.
+    Multi-hive Application: Applies to both HKLM and HKCU registries
+
+# 🔧 System Component Repair
+
+    Boot Environment Recovery:
+
+        Boot Manager path restoration (\bootmgr)
+
+        Safe Boot configuration repair (Minimal/Network)
+
+        Windows Recovery Environment re-enablement
+
+    Service Restoration:
+
+        Critical service auto-start configuration (WinDefend, BITS, wuauserv, VSS)
+
+        Service failure recovery policies
+
+        System file protection restoration
+
+    Keyboard & Input Security: Malicious Scancode Map removal
+
+# 🌐 Browser & Application Repair
+
+    Browser Settings Reset: Chrome, Edge homepage and startup restoration
+
+    File Association Repair:
+
+        .exe, .cmd, .bat, .ps1 association correction
+
+        Default handler restoration using assoc and ftype
+
+    Application Compatibility: IFEO debugger removal for legitimate applications
+
+# Updated User Interface
+
+    Two-Column Layout: Organized repair options in categorized columns
+
+    Real-time Progress Tracking: Visual progress bar with percentage completion
+
+    Status Updates: Step-by-step operation feedback
+
+    Diagnostic Results Panel: Comprehensive scan results display
+
+# 🚀 Workflow Optimization
+
+    Diagnostic Scan → Automatic Repair Selection → Execution → Results
+
+    One-Click "Select All" for comprehensive recovery
+
+    Individual Option Control for targeted repairs
+
+    Report Generation for documentation and analysis
+
+# 🛡️ Security & Transparency Features
+
+# 🔓 Legitimacy Assurance
+
+    No Network Activity: All operations are local; zero internet connectivity required
+
+    Full Source Availability: Complete C++ source code for independent verification
+
+    Administrator Enforcement: Requires and verifies elevated privileges
+
+    User Consent: Explicit confirmation required for all major operations
+
+    Comprehensive Logging: Detailed operation logs for audit trails
+
+# 📊 Safety Mechanisms
+
+    Structured Execution: Controlled, step-by-step repair processes
+
+    Error Handling: Graceful failure recovery and status reporting
+
+    System Compatibility Checks: Windows version validation before sensitive operations
+
+    Single Instance Enforcement: Prevents multiple simultaneous executions
+
+# 🚀 Practical Usage Scenarios
+
+🎯 Primary Use Cases
+
+    Malware Persistence Removal: Systems with surviving infections after normal scans
+
+    Ransomware Policy Reversal: Undoing system lockdowns and restrictions
+
+    Forensic Preparation: Cleaning systems for security analysis
+
+    Deep System Corruption: Repairing registry-level system damage
+
+    Security Tool Restoration: Re-enabling disabled security utilities
+
+# 📋 Recommended Workflow
+
+    Backup: Ensure data backups and system restore points
+
+    Diagnose: Run comprehensive system diagnostics
+
+    Review: Examine automatic repair recommendations
+
+    Execute: Run selected recovery operations
+
+    Document: Save diagnostic reports for records
+
+    Restart: Reboot to ensure all changes take effect
+
+
+# Compilation Notes
+
+    Compiler: Visual Studio 2019+ recommended
+
+    Character Set: Unicode required
+
+    Subsystem: Windows (/SUBSYSTEM:WINDOWS)
+
+    Libraries: Standard Windows SDK libraries
 
 # 📄 Additional References
 
-Updated Tria.ge Analysis: https://tria.ge/250914-j128esttgs/behavioral1
+    Updated Tria.ge Analysis: Latest Behavioral Report
 
-Author: Security Enthusiast
+    Source Repository: Available for security review and compilation
 
-Version: 1.3
+    Version: 2.0+ (with Diagnostic System)
 
-License: Provided for legitimate recovery and educational purposes only.
+    Author: Security Research & Development
 
+    License: Provided for legitimate recovery, educational, and research purposes only
+
+⚠️ REMINDER: This tool performs deep system modifications. Always test in controlled environments first and ensure comprehensive backups before production use. The developers assume no liability for system damage or data loss.
