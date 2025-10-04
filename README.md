@@ -219,6 +219,7 @@ RegRestorer is a comprehensive C++ Windows recovery application serving as a "nu
 # 📄 Additional References
 
     Updated Tria.ge Analysis: Latest Behavioral Report
+    https://tria.ge/251004-xl97da1lt3/behavioral1
 
     Source Repository: Available for security review and compilation
 
