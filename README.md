@@ -222,7 +222,7 @@ RegRestorer is a comprehensive C++ Windows recovery application serving as a "nu
 
     Source Repository: Available for security review and compilation
 
-    Version: 2.0+ (with Diagnostic System)
+    Version: 1.4 (with Diagnostic System)
 
     Author: Security Research & Development
 
