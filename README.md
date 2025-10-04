@@ -230,3 +230,21 @@ RegRestorer is a comprehensive C++ Windows recovery application serving as a "nu
     License: Provided for legitimate recovery, educational, and research purposes only
 
 ⚠️ REMINDER: This tool performs deep system modifications. Always test in controlled environments first and ensure comprehensive backups before production use. The developers assume no liability for system damage or data loss.
+
+# 🔬 MITRE ATT&CK Mapping
+
+## Detection Analysis Confirms Effectiveness
+
+Our tool triggers **enterprise EDR platforms** because we perform the **exact same registry modifications** as advanced threats - but in reverse to **repair systems**.
+
+### MITRE Techniques Triggered:
+- **T1547.004** - Boot or Logon Autostart Execution: Winlogon Helper DLL
+- **T1112** - Modify Registry  
+- **T1543.003** - Create or Modify System Process: Windows Service
+- **T1562.001** - Impair Defenses: Disable or Modify Tools
+- **T1548.002** - Abuse Elevation Control Mechanism: Bypass User Account Control
+
+### Why This Matters:
+Each detection confirms we're addressing **real persistence mechanisms** used by advanced threats. Our "malicious-looking" activity is actually **comprehensive system repair**.
+
+**We don't just clean malware - we undo its deepest persistence techniques.**
