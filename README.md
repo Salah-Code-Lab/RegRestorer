@@ -20,7 +20,7 @@
 # 📖 Overview
 
 RegRestorer is a comprehensive C++ Windows recovery application serving as a "nuclear option" for repairing systems compromised by malware, ransomware, or hijackers. It systematically undoes malicious registry modifications and system changes commonly used for persistence, disabling security tools, or maintaining unauthorized control.
-🎯 New Diagnostic System (v2.0 Update)
+🎯 New Diagnostic System (v1.4 Update)
 🔍 Automated System Assessment
 
     Comprehensive Health Scan: 15-point diagnostic check of critical system components
