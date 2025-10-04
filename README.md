@@ -243,8 +243,3 @@ Our tool triggers **enterprise EDR platforms** because we perform the **exact sa
 - **T1543.003** - Create or Modify System Process: Windows Service
 - **T1562.001** - Impair Defenses: Disable or Modify Tools
 - **T1548.002** - Abuse Elevation Control Mechanism: Bypass User Account Control
-
-### Why This Matters:
-Each detection confirms we're addressing **real persistence mechanisms** used by advanced threats. Our "malicious-looking" activity is actually **comprehensive system repair**.
-
-**We don't just clean malware - we undo its deepest persistence techniques.**
