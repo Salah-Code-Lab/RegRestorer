@@ -22,7 +22,7 @@
 #pragma comment(lib, "dwmapi.lib")
 
 // Function Declarations
-// Add these missing declarations after the includes
+
 void LogMessage(const wchar_t* format, ...);
 void UpdateProgress(const wchar_t* status);
 void LogRegistryOperation(const wchar_t* operation, HKEY hive, const wchar_t* subKey, const wchar_t* valueName, LONG result);
@@ -1791,3 +1791,4 @@ INT WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     return (int)msg.wParam;
 }
+
