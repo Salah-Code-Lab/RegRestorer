@@ -3,7 +3,7 @@
 # 🚨 Critical Disclaimer & Warning
 
 # RegRestorer is a highly invasive system utility designed for extreme recovery scenarios. It performs deep modifications to the Windows Registry and system configurations to revert settings to Microsoft defaults and remove persistent malware
-# artifacts.
+ artifacts.
 
 ⚠️ EXTREME RISK WARNING:
 
